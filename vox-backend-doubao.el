@@ -16,7 +16,7 @@
 (defcustom vox-doubao-resource-id "volc.seedasr.sauc.duration"
   "SeedASR resource ID; it must match the account's entitlement."
   :type 'string :group 'vox)
-(defcustom vox-doubao-key-environment "DOUBAO_API_KEY"
+(defcustom vox-doubao-key-environment "VOX_DOUBAO_API_KEY"
   "Environment variable used after auth-source for the Doubao API key."
   :type 'string :group 'vox)
 (defcustom vox-doubao-second-pass t

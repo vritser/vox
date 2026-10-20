@@ -112,7 +112,7 @@ Provider errors intentionally omit untrusted messages and parameter echoes."
          (_ (vox-check-endpoint url '("dashscope.aliyuncs.com"
                                       "dashscope-intl.aliyuncs.com")))
          (host (url-host (url-generic-parse-url url)))
-         (secret (vox-secret host "DASHSCOPE_API_KEY")))
+         (secret (vox-secret host "VOX_QWEN_API_KEY")))
     (setf (vox-session-backend-state session)
           (list :on-ready on-ready :on-event on-event :on-error on-error
                 :final-items (make-hash-table :test #'equal)))

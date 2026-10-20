@@ -75,19 +75,29 @@ provider and can incur charges. Offline ERT tests use a local fake provider.
 
 ## Credentials and regions
 
+The [README API key setup](../README.md#api-key-configuration) includes a masked
+prompt for the current Emacs session and a complete encrypted-file setup. Neither
+method requires placing a real key in your Emacs configuration or repository.
+
 Secrets resolve through `auth-source` first (host matching the endpoint, user
 `apikey`), then the provider environment variable. Prefer an encrypted auth-source
 file configured outside this repository. Example structure, **not real keys**:
 
 ```text
 machine dashscope.aliyuncs.com login apikey password YOUR_KEY
+machine dashscope-intl.aliyuncs.com login apikey password YOUR_KEY
 machine openspeech.bytedance.com login apikey password YOUR_KEY
 ```
 
-Alternatively provide `DASHSCOPE_API_KEY` or `DOUBAO_API_KEY` in the environment
+Keep only the entries for endpoints you use. When changing a stored entry, run
+`M-x auth-source-forget-all-cached` before retrying; an existing auth-source key
+takes priority over environment variables.
+
+Alternatively provide `VOX_QWEN_API_KEY` or `VOX_DOUBAO_API_KEY` in the environment
 that starts Emacs. Do not put real keys in shell history, source code, issues,
 or command-line arguments. GUI Emacs may not inherit your terminal's environment.
-`vox-doubao-key-environment` changes the latter variable's name.
+There are no legacy-name aliases or automatic fallbacks. The
+`vox-doubao-key-environment` option explicitly selects a single variable name.
 
 ### Qwen
 

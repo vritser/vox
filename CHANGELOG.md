@@ -20,6 +20,14 @@
 
 ### Changed
 
+- **Namespaced credential environment:** Qwen reads `VOX_QWEN_API_KEY` and
+  Doubao defaults to `VOX_DOUBAO_API_KEY`. The previous environment names have
+  no aliases or automatic fallback; `auth-source` remains the first choice.
+
+- **API key setup on the README:** direct masked-input and encrypted auth-source
+  examples, provider/region host mappings, credential precedence, cache reset,
+  and GUI Emacs environment guidance replace a link-only setup step.
+
 - **One verification entry point:** `scripts/verify.sh` replaces Makefile-based
   checks with static syntax validation, tool self-tests, strict temporary-directory
   compilation, full ERT, silent loading, and diff/junk checks. CI calls the same gate.

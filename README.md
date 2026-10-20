@@ -27,8 +27,9 @@ packet are verified. A socket close is not successful recognition.
 3. [Select an audio device](docs/customization.md#choose-an-audio-device).
    `vox-audio-input` must be an explicit FFmpeg argv list; Vox does not guess
    microphone numbers. Grant microphone permission to the responsible app.
-4. [Configure credentials and region](docs/customization.md#credentials-and-regions)
-   for Qwen (default) or experimental Doubao. Starting a cloud session sends
+4. [Configure an API key](#api-key-configuration) for Qwen (default) or
+   experimental Doubao, and check the [provider region](docs/customization.md#credentials-and-regions).
+   Starting a cloud session sends
    audio to the provider and may incur charges. An
    [optional CLI backend](docs/customization.md#optional-cli-backend) can instead
    capture its own audio.
@@ -38,6 +39,65 @@ packet are verified. A socket close is not successful recognition.
 
 A [use-package example](docs/customization.md#example-configuration) and all
 setup details are in the customization guide.
+
+## API key configuration
+
+Vox reads `auth-source` first, then the provider's environment variable. It does
+not load a `.env` file. An existing `auth-source` key takes priority over an
+environment key; configure the account and region you actually use. The default
+environment names below have no legacy aliases or automatic fallback.
+
+| Backend / region | Environment variable | `auth-source` host |
+| --- | --- | --- |
+| Qwen, Beijing (default) | `VOX_QWEN_API_KEY` | `dashscope.aliyuncs.com` |
+| Qwen, Singapore | `VOX_QWEN_API_KEY` | `dashscope-intl.aliyuncs.com` |
+| Doubao (experimental) | `VOX_DOUBAO_API_KEY` | `openspeech.bytedance.com` |
+
+### Try it in the current Emacs session
+
+For Qwen, press `M-:` and evaluate this expression, then enter your key at the
+masked prompt. The expression does not contain or print the key:
+
+```elisp
+(progn
+  (setenv "VOX_QWEN_API_KEY" (read-passwd "DashScope API key: "))
+  (message "Vox: Qwen API key configured"))
+```
+
+This sets the environment of the running Emacs, including GUI Emacs, until it
+exits. The message confirms local configuration, not successful authentication.
+For Doubao, use `VOX_DOUBAO_API_KEY` instead and select `(setq vox-backend 'doubao)`;
+check its [resource ID and experimental status](docs/customization.md#doubao-experimental).
+If you supply environment variables outside Emacs, set them before launching
+Emacs. A running Emacs does not pick up later terminal exports, and GUI Emacs
+may not inherit the terminal's environment.
+
+### Keep a key across restarts (recommended)
+
+Use an encrypted auth-source file outside the repository. Add this to your Emacs
+configuration; it contains only the file location, not a secret:
+
+```elisp
+(require 'auth-source)
+(add-to-list 'auth-sources "~/.authinfo.gpg")
+```
+
+Open that file in Emacs and add the entry for your provider, replacing the
+placeholder with your real key. These examples are **not real credentials**:
+
+```text
+machine dashscope.aliyuncs.com login apikey password YOUR_QWEN_API_KEY
+machine dashscope-intl.aliyuncs.com login apikey password YOUR_SINGAPORE_API_KEY
+machine openspeech.bytedance.com login apikey password YOUR_DOUBAO_API_KEY
+```
+
+Save it encrypted using Emacs/GnuPG; this requires a working GnuPG setup. Keep
+only the entries you need. The host must match the selected endpoint, and the
+login must be `apikey`. After changing an entry, run
+`M-x auth-source-forget-all-cached` before retrying. Do not put real keys in your
+Emacs config, repository, shell history, or issue reports. See the
+[credential and region guide](docs/customization.md#credentials-and-regions)
+for endpoint selection.
 
 ## Keys and commands
 
