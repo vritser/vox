@@ -11,6 +11,18 @@
 (defcustom vox-preview-width 72 "Maximum preview display columns."
   :type 'integer :group 'vox)
 
+(defun vox-ui--preview-columns (session)
+  "Return safe one-line preview columns at SESSION's captured marker."
+  (let* ((buffer (vox-session-target-buffer session))
+         (column (with-current-buffer buffer
+                   (save-excursion (goto-char (vox-session-target-marker session))
+                                   (current-column))))
+         (width (max 0 vox-preview-width)))
+    (dolist (window (get-buffer-window-list buffer nil t))
+      (setq width (min width (max 0 (- (window-body-width window)
+                                      (- column (window-hscroll window)) 4)))))
+    width))
+
 (defun vox-make-buffer-sink ()
   "Return a sink using the session's captured buffer and insertion marker.
 Typing at that marker moves it after typed text.  Neither preview nor commit
@@ -27,12 +39,14 @@ switches windows or sends input to an agent."
                                        (vox-session-target-buffer session) t t)))
          (move-overlay overlay (vox-session-target-marker session)
                        (vox-session-target-marker session))
-         (overlay-put overlay 'after-string
-                      (propertize
-                       (concat " [" (truncate-string-to-width
-                                      (replace-regexp-in-string "[\n\r\t]+" " " text)
-                                      (max 1 vox-preview-width) nil nil "...") "]")
-                       'face 'shadow))))
+         (let ((width (vox-ui--preview-columns session)))
+           (overlay-put overlay 'after-string
+                        (when (> width 0)
+                          (propertize
+                           (concat " [" (truncate-string-to-width
+                                          (replace-regexp-in-string "[\n\r\t]+" " " text)
+                                          width nil nil (when (>= width 3) "...")) "]")
+                           'face 'shadow))))))
      :on-state
      (lambda (_session state)
        (when (memq state '(completed cancelled error))

@@ -163,7 +163,9 @@ Optional header extension bytes are skipped. After that header:
 4. Type 9 (full server response): read `uint32 payload_size`.
 5. Type 15 (server error): read `int32 code`, then `uint32 payload_size`.
 6. Read exactly that many payload bytes. Compression 1 means gzip, 0 means
-   uncompressed; serialization 1 means UTF-8 JSON.
+   uncompressed; serialization 1 means UTF-8 JSON. A zero-length payload returns
+   the envelope immediately, before gzip/JSON, matching both official parsers;
+   an empty final response can therefore still complete recognition.
 
 Vox rejects unsupported types/flags/codecs, bad version/reserved bytes,
 truncation, trailing bytes, and oversized frames. One transport message must be
@@ -227,5 +229,9 @@ Unverified or intentionally limited:
   Qwen event types are ignored; unsupported binary envelope variants fail closed.
 - Minimum-version Emacs 28/29/30 and live websocket.el behavior are covered by
   the separate project audit/CI work, not claimed by these Emacs 31 local tests.
+
+Local verification on Emacs 31.1.50: 18 provider ERT tests passed, and both
+provider files passed byte compilation with `byte-compile-error-on-warn=t`.
+This is offline validation, not a network integration claim.
 
 No credentials or recorded audio were used, and no commits were created.

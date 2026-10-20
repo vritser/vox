@@ -184,5 +184,18 @@
       (vox-doubao-finish session)
       (should (equal (vox-doubao--gunzip (substring (car sent) 12)) "")))))
 
+(ert-deftest vox-doubao-empty-final-payload ()
+  ;; Both official parsers return before gzip/JSON when payload size is zero.
+  (let* ((bytes (unibyte-string #x11 #x93 #x11 0 255 255 255 253 0 0 0 0))
+         (packet (vox-doubao-decode bytes))
+         events
+         (session (vox--make-session
+                   :backend-state (list :ready t :finished t
+                                        :on-event (lambda (e) (push e events))))))
+    (should (plist-get packet :last-p))
+    (should-not (plist-get packet :payload))
+    (vox-doubao--message session bytes 'binary)
+    (should (equal events '((:type :completed))))))
+
 (provide 'vox-doubao-test)
 ;;; vox-doubao-test.el ends here

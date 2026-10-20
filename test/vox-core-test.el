@@ -191,4 +191,64 @@
             ((symbol-function 'getenv) (lambda (_) "env-secret")))
     (should (equal (vox-secret "host" "ENV") "auth-secret"))))
 
+(ert-deftest vox-core-reentrant-finish-commits-once ()
+  (vox-test-session
+    (funcall ready)
+    (setf (vox-session-sink session)
+          (list :on-finish (lambda (_s text)
+                             (push text commits)
+                             (funcall emit '(:type :completed)))))
+    (funcall emit '(:type :segment-final :id "a" :text "once"))
+    (vox-core-stop) (funcall emit '(:type :completed))
+    (should (equal commits '("once")))
+    (should (= closes 1))
+    (should (eq (vox-session-state session) 'completed))))
+
+(ert-deftest vox-core-cancel-discards-transcript ()
+  (vox-test-session
+    (funcall ready)
+    (funcall emit '(:type :snapshot :text "private hypothesis"))
+    (vox-core-cancel)
+    (should (equal (vox-session-text session) ""))
+    (should (equal (vox-session-preview-text session) ""))))
+
+(ert-deftest vox-core-finalizing-notification-cannot-complete-before-finish ()
+  (vox-test-session
+    (funcall ready)
+    (funcall emit '(:type :segment-partial :id "a" :text "partial"))
+    (setf (vox-session-sink session)
+          (list :on-state (lambda (_s state)
+                            (when (eq state 'finalizing) (funcall emit '(:type :completed))))
+                :on-finish (lambda (_s text) (push text commits))))
+    (vox-core-stop)
+    (should-not commits)
+    (should (= finishes 0))
+    (should (eq (vox-session-state session) 'error))))
+
+(ert-deftest vox-core-synchronous-backend-completion-supported ()
+  (vox-test-session
+    (funcall ready)
+    (setf (vox-session-methods session)
+          (plist-put (vox-session-methods session) :finish
+                     (lambda (_s) (funcall emit '(:type :completed)))))
+    (vox-core-stop)
+    (should (equal commits '("")))
+    (should (eq (vox-session-state session) 'completed))))
+
+(ert-deftest vox-ui-narrow-window-cjk-preview-stays-on-one-line ()
+  (vox-test-session
+    (let* ((sink (vox-make-buffer-sink)) (preview (plist-get sink :on-preview))
+           (text (concat (string #x4e2d #x6587 #x1f399) "\nsecond line")))
+      (setf (vox-session-sink session) sink)
+      (cl-letf (((symbol-function 'get-buffer-window-list) (lambda (&rest _) (list (selected-window))))
+                ((symbol-function 'window-body-width) (lambda (&rest _) 6))
+                ((symbol-function 'window-hscroll) (lambda (_) 0)))
+        (funcall preview session text 'recording)
+        (let* ((overlay (car (append (car (overlay-lists)) (cdr (overlay-lists)))))
+               (display (overlay-get overlay 'after-string)))
+          (should overlay)
+          (should (<= (string-width display) 5))
+          (should-not (string-match-p "\n" display))
+          (should (equal (buffer-string) "")))))))
+
 (provide 'vox-core-test)

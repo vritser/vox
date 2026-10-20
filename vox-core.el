@@ -25,7 +25,7 @@
   id generation backend methods backend-state state websocket recorder
   audio-pending audio-timer audio-ended chunk-bytes queue-limit
   target-buffer target-marker sink segments snapshot snapshot-revision snapshot-final
-  preview-text final-text stop-requested finish-sent committed cleaned
+  preview-text final-text stop-requested finish-sent finish-dispatched committed cleaned
   stop-timer connect-timer duration-timer preview-timer kill-hook
   last-error statistics)
 
@@ -143,7 +143,7 @@ text typed at the original insertion point.  Return the new session."
                    :target-marker (with-current-buffer target (copy-marker (or marker (point)) t))
                    :audio-pending (unibyte-string) :chunk-bytes (* 32 chunk-ms)
                    :queue-limit (floor (* 32000 vox-audio-backlog-seconds))
-                   :preview-text "" :statistics '(:sent-bytes 0 :queue-peak 0))))
+                   :preview-text "" :statistics (list :sent-bytes 0 :queue-peak 0))))
     (unless (memq chunk-ms '(100 200)) (user-error "Vox frames must be 100 or 200 ms"))
     (setq vox--active-session session)
     (setf (vox-session-kill-hook session)
@@ -210,7 +210,11 @@ text typed at the original insertion point.  Return the new session."
   "Discard SESSION or active recording, without a final commit."
   (setq session (or session vox--active-session))
   (when (and session (vox--live-p session))
-    (setf (vox-session-state session) 'cancelled)
+    (setf (vox-session-state session) 'cancelled
+          (vox-session-segments session) nil
+          (vox-session-snapshot session) nil
+          (vox-session-preview-text session) ""
+          (vox-session-final-text session) nil)
     (unwind-protect
         (progn (ignore-errors (vox--notify session :on-state 'cancelled))
                (ignore-errors (vox--method session :cancel)))
@@ -234,7 +238,7 @@ text typed at the original insertion point.  Return the new session."
 
 (defun vox-core-audio-ended (session)
   "Observe recorder exit for SESSION before sending its final PCM remainder."
-  (when (vox--live-p session)
+  (when (and (vox--live-p session) (not (vox-session-audio-ended session)))
     (if (not (eq (vox-session-state session) 'draining))
         (vox-core-fail session "Recorder exited unexpectedly; check input device and microphone permission")
       (setf (vox-session-audio-ended session) t)
@@ -269,7 +273,9 @@ text typed at the original insertion point.  Return the new session."
                       (setf (vox-session-audio-pending session) (unibyte-string)
                             (vox-session-finish-sent session) t)
                       (vox--state session 'finalizing)
-                      (when (vox--live-p session) (vox--method session :finish)))))))))
+                      (when (vox--live-p session)
+                        (setf (vox-session-finish-dispatched session) t)
+                        (vox--method session :finish)))))))))
       (error (vox-core-fail session "Audio transmission failed")))))
 
 (defun vox--send-pcm (session bytes)
@@ -318,8 +324,10 @@ text typed at the original insertion point.  Return the new session."
                           (or (null revision) (numberp revision)))
                (error "Invalid segment"))
              (unless (or (and (not final) (plist-get old :final))
-                         (and revision old-rev (<= revision old-rev)
-                              (or (not final) (plist-get old :final))))
+                         (and revision old-rev
+                              (or (< revision old-rev)
+                                  (and (= revision old-rev)
+                                       (or (not final) (plist-get old :final))))))
                (let ((value (list :text text :revision (or revision old-rev) :final final)))
                  (if entry (setcdr entry value)
                    (setf (vox-session-segments session)
@@ -345,7 +353,8 @@ text typed at the original insertion point.  Return the new session."
 (defun vox--complete (session)
   "Commit authoritative SESSION completion once, after audio finalization."
   (unless (and (eq (vox-session-state session) 'finalizing)
-               (vox-session-finish-sent session))
+               (vox-session-finish-sent session)
+               (vox-session-finish-dispatched session))
     (error "Provider completed before finish"))
   (setf (vox-session-final-text session) (vox-session-text session))
   (unless (vox-session-committed session)

@@ -147,7 +147,8 @@ Sequence, last-p, and event are envelope fields, not JSON body fields."
                  (= (+ offset size) (length bytes)))
       (error "Invalid Doubao payload length"))
     (setq payload (substring bytes offset))
-    (when (= compression 1) (setq payload (vox-doubao--gunzip payload)))
+    (when (and (= compression 1) (> size 0))
+      (setq payload (vox-doubao--gunzip payload)))
     (when (and (= type 9) (/= serialization 1) (> (length payload) 0))
       (error "Doubao recognition response must be JSON"))
     (list :message-type type :sequence sequence :event event
