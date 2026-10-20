@@ -20,11 +20,21 @@
   :type 'number :group 'vox)
 (defcustom vox-max-transcript-chars 200000 "Maximum live hypothesis characters."
   :type 'integer :group 'vox)
+(defcustom vox-max-segments 1024
+  "Maximum distinct segments retained in a live hypothesis."
+  :type 'integer :group 'vox)
+(defcustom vox-max-segment-id-bytes 1024
+  "Maximum bytes in a single segment identifier."
+  :type 'integer :group 'vox)
+(defcustom vox-max-segment-id-total-bytes 65536
+  "Maximum total identifier bytes across distinct retained segments."
+  :type 'integer :group 'vox)
 
 (cl-defstruct (vox-session (:constructor vox--make-session))
   id generation backend methods backend-state state websocket recorder
   audio-pending audio-timer audio-ended chunk-bytes queue-limit
   target-buffer target-marker sink segments snapshot snapshot-revision snapshot-final
+  (segment-count 0) (segment-id-bytes 0) (segment-text-chars 0)
   preview-text final-text stop-requested finish-sent finish-dispatched committed cleaned
   stop-timer connect-timer duration-timer preview-timer kill-hook
   last-error statistics)
@@ -126,7 +136,10 @@
 A nil SINK is supported for headless callers.  MARKER is copied and follows
 text typed at the original insertion point.  Return the new session."
   (when vox--active-session (user-error "A Vox session is already active"))
-  (unless (and (numberp vox-audio-backlog-seconds)
+  (unless (and (cl-every (lambda (limit) (and (integerp limit) (> limit 0)))
+                         (list vox-max-transcript-chars vox-max-segments
+                               vox-max-segment-id-bytes vox-max-segment-id-total-bytes))
+               (numberp vox-audio-backlog-seconds)
                (<= 0.5 vox-audio-backlog-seconds 5)
                (> vox-connect-timeout 0) (> vox-stop-timeout 0)
                (> vox-max-session-seconds 0) (> vox-preview-interval 0))
@@ -212,6 +225,9 @@ text typed at the original insertion point.  Return the new session."
   (when (and session (vox--live-p session))
     (setf (vox-session-state session) 'cancelled
           (vox-session-segments session) nil
+          (vox-session-segment-count session) 0
+          (vox-session-segment-id-bytes session) 0
+          (vox-session-segment-text-chars session) 0
           (vox-session-snapshot session) nil
           (vox-session-preview-text session) ""
           (vox-session-final-text session) nil)
@@ -298,8 +314,6 @@ text typed at the original insertion point.  Return the new session."
 (defun vox--preview (session)
   "Coalesce preview notifications for SESSION."
   (setf (vox-session-preview-text session) (vox-session-text session))
-  (when (> (length (vox-session-preview-text session)) vox-max-transcript-chars)
-    (error "Transcript limit exceeded"))
   (unless (vox-session-preview-timer session)
     (setf (vox-session-preview-timer session)
           (run-at-time vox-preview-interval nil
@@ -315,35 +329,55 @@ text typed at the original insertion point.  Return the new session."
     (condition-case nil
         (pcase (plist-get event :type)
           ((or :segment-partial :segment-final)
-           (let* ((id (plist-get event :id)) (text (plist-get event :text))
-                  (revision (plist-get event :revision))
-                  (entry (assoc id (vox-session-segments session)))
-                  (old (cdr entry)) (old-rev (plist-get old :revision))
-                  (final (eq (plist-get event :type) :segment-final)))
+           (let ((id (plist-get event :id)) (text (plist-get event :text))
+                 (revision (plist-get event :revision))
+                 (final (eq (plist-get event :type) :segment-final)))
              (unless (and (stringp id) (stringp text)
+                          (<= (string-bytes id) vox-max-segment-id-bytes)
                           (or (null revision) (numberp revision)))
                (error "Invalid segment"))
-             (unless (or (and (not final) (plist-get old :final))
-                         (and revision old-rev
-                              (or (< revision old-rev)
-                                  (and (= revision old-rev)
-                                       (or (not final) (plist-get old :final))))))
-               (let ((value (list :text text :revision (or revision old-rev) :final final)))
-                 (if entry (setcdr entry value)
-                   (setf (vox-session-segments session)
-                         (nconc (vox-session-segments session) (list (cons id value))))))
-               (setf (vox-session-snapshot session) nil)
-               (vox--preview session))))
+             ;; The segment cap also bounds these ordered-list traversals.
+             (let* ((entry (assoc id (vox-session-segments session)))
+                    (old (cdr entry)) (old-rev (plist-get old :revision)))
+               (unless (or (and (not final) (plist-get old :final))
+                           (and revision old-rev
+                                (or (< revision old-rev)
+                                    (and (= revision old-rev)
+                                         (or (not final) (plist-get old :final))))))
+                 (let ((count (+ (vox-session-segment-count session) (if entry 0 1)))
+                       (id-bytes (+ (vox-session-segment-id-bytes session)
+                                    (if entry 0 (string-bytes id))))
+                       (chars (+ (- (vox-session-segment-text-chars session)
+                                    (length (plist-get old :text)))
+                                 (length text))))
+                   (unless (and (<= count vox-max-segments)
+                                (<= id-bytes vox-max-segment-id-total-bytes)
+                                (<= chars vox-max-transcript-chars))
+                     (error "Transcript limit exceeded"))
+                   (let ((value (list :text text :revision (or revision old-rev) :final final)))
+                     (if entry (setcdr entry value)
+                       (setf (vox-session-segments session)
+                             (nconc (vox-session-segments session) (list (cons id value))))))
+                   (setf (vox-session-segment-count session) count
+                         (vox-session-segment-id-bytes session) id-bytes
+                         (vox-session-segment-text-chars session) chars
+                         (vox-session-snapshot session) nil))
+                 (vox--preview session)))))
           (:snapshot
            (let ((text (plist-get event :text)) (revision (plist-get event :revision))
                  (old (vox-session-snapshot-revision session)))
              (unless (and (stringp text) (or (null revision) (numberp revision)))
                (error "Invalid snapshot"))
              (unless (and revision old (<= revision old))
+               (when (> (length text) vox-max-transcript-chars)
+                 (error "Transcript limit exceeded"))
                (setf (vox-session-snapshot session) text
                      (vox-session-snapshot-revision session) revision
                      (vox-session-snapshot-final session) (eq (plist-get event :final-p) t)
-                     (vox-session-segments session) nil)
+                     (vox-session-segments session) nil
+                     (vox-session-segment-count session) 0
+                     (vox-session-segment-id-bytes session) 0
+                     (vox-session-segment-text-chars session) 0)
                (vox--preview session))))
           (:completed (vox--complete session))
           (:error (vox-core-fail session "Provider reported a recognition error"))
