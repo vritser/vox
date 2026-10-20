@@ -29,14 +29,17 @@ public commands -> session core -> backend contract -> provider / CLI
 ```
 
 - Core owns lifecycle and transcript state, not provider-specific wire branches
-  or buffer insertion. Session generations reject stale callbacks.
+  or buffer insertion. Session generations reject stale callbacks. Transcript
+  characters, segment count and retained ID bytes have independent budgets;
+  empty segments do not bypass metadata limits.
 - Backends translate wire events into normalized data. They never insert into
   user buffers. Cloud adapters use the shared transport; the CLI owns its process.
 - Audio capture supplies binary PCM and a terminal process signal. A stop request
   is not proof that capture ended; core drains before dispatching finish once.
 - Sinks own display and insertion. The default sink uses the captured buffer and
-  marker, not the callback's current buffer. Custom sinks enforce their own
-  editability boundaries and cleanup.
+  marker, not the callback's current buffer or narrowing boundary. It temporarily
+  widens for marker operations and restores the user's restriction and point.
+  Custom sinks enforce their own editability boundaries and cleanup.
 - Authoritative completion permits one final insertion. Cancellation, socket
   closure, and process exit alone cannot turn a partial transcript into success.
 - Loading Vox is silent and does not start capture or connect. Backend registration

@@ -139,9 +139,12 @@ and authoritative final response remain live integration checks.
 Preview is a throttled one-line overlay, not buffer text. Typing at the captured
 insertion point moves its marker **after** your typing. Successful final text
 inserts once at that marker with an undo boundary. Switching buffers does not
-redirect insertion; killing the original buffer cancels. Read-only insertion
-fails without overriding protection, retaining final text for manual recovery.
-Vox never presses Return or submits to an agent.
+redirect insertion; killing the original buffer cancels. If you narrow the buffer
+during recording, Vox temporarily widens for marker-based preview measurements
+and final insertion, then restores the restriction and point. Text still lands
+at the captured marker, even outside the currently visible region. Buffer and
+text-property read-only protection remain in force; failed insertion retains
+final text for manual recovery. Vox never presses Return or submits to an agent.
 
 | Option | Default | Purpose |
 | --- | --- | --- |
@@ -152,6 +155,10 @@ Vox never presses Return or submits to an agent.
 | `vox-connect-timeout` | `20` | Seconds allowed for backend readiness |
 | `vox-stop-timeout` | `15` | Seconds allowed for drain and completion |
 | `vox-audio-backlog-seconds` | `2` | PCM queue limit, configurable from 0.5 to 5 seconds |
+| `vox-max-transcript-chars` | `200000` | Maximum live transcript characters |
+| `vox-max-segments` | `1024` | Maximum distinct retained transcript segments, including empty ones |
+| `vox-max-segment-id-bytes` | `1024` | Maximum bytes in one segment ID |
+| `vox-max-segment-id-total-bytes` | `65536` | Maximum total bytes in distinct retained segment IDs |
 
 Continuous cloud audio may incur charges. FFmpeg interruption can truncate the
 last capture block. If the first interrupt does not stop capture, one guarded
@@ -166,6 +173,13 @@ Core slices arbitrary binary process chunks into 100 ms frames (Qwen) or
 100/200 ms frames (Doubao). Its bounded PCM queue fails on overflow without
 silently dropping bytes. Each drain tick does bounded work; no extra sleep is
 added to real-time capture.
+
+Transcript limits also bound metadata: empty-text segments still consume the
+segment-count and ID-byte budgets. Updating an existing ID does not charge it
+again; an accepted full snapshot replaces the segment set and resets those
+budgets. All four transcript/segment limits must be positive integers. An event
+that would exceed a limit fails the session instead of silently dropping a
+segment; previously accepted text remains available for explicit recovery.
 
 `websocket.el` does not expose reliable socket buffered-byte counts, and Emacs
 `process-send-string` can block on a slow peer. Vox bounds its own queues and

@@ -75,6 +75,38 @@ The new benchmark entry `emacs -Q --batch -l scripts/benchmark.el` processed 600
 frames / 19,200,000 bytes: elapsed 0.295546 seconds, 21 GCs / 0.170659 GC seconds,
 queue peak 3200 bytes. This is still an accelerated model, not real-time evidence.
 
+## Correctness hardening - 2026-10-20
+
+All three reported failures were reproduced offline before their fixes. The
+shared `scripts/verify.sh` gate now passes with 25 checked Lisp files, 11 checker
+self-tests, 4 runner self-tests, and 9 strictly compiled runtime modules.
+
+The final product run reports **106 expected, 0 unexpected, 0 skipped**
+(2.325412 seconds), including 24 new regressions:
+
+- Three UI tests cover captured markers on either side of a narrowed region,
+  preserved restriction/point/mark, one undoable insertion, preview columns and
+  overlay position, and hidden read-only text with recoverable final output.
+- Ten transport tests cover every split of two coalesced frames, large batches,
+  handshake/data transitions, preserved wire limits, independent control-frame
+  budgets, byte-split masked frames, and reentrant close before later input.
+- Eleven resource-limit tests cover empty-text floods, UTF-8 ID byte counts,
+  exact count/byte/text boundaries, repeated IDs, snapshot reset/stale snapshots,
+  rejection before mutating recovery text, terminal recovery/cancellation,
+  invalid configuration, and Qwen final-item cleanup at overflow.
+
+Default metadata limits are 1024 retained segments, 1024 bytes per ID, and 65536
+ID bytes in total. Ordered-list traversal is now bounded by that segment cap;
+this change does not claim constant-time lookup or remove all repeated text
+assembly. Transport probes and then reuses the upstream filter, so its extra
+bounded parsing/copying cost is explicit rather than a claim of zero overhead.
+
+The accelerated 600-second model still sends 6000 frames / 19,200,000 bytes:
+0.270313 seconds elapsed, 19 GCs / 0.145528 GC seconds, queue peak 3200 bytes.
+These are local synthetic measurements, not wall-clock capture or network data.
+No live cloud, microphone, credential-store, or multi-version CI test was run;
+this repair makes no new claims about those acceptance boundaries.
+
 ## Acceptance boundary
 
 Implemented and locally checked: independent `vox-*` package, asynchronous capture/setup, bounded PCM queue, fragment-safe transport, snapshot/segment replacement, preview-only partials, one final undoable insertion, captured-target ownership, stop/cancel distinction, late-event suppression, credential resolver/endpoint validation, CLI protocol, docs and source release target.

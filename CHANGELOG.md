@@ -41,6 +41,16 @@
 
 ### Fixed
 
+- **Captured positions survive narrowing:** preview measurements and final
+  insertion use the real marker, then restore the user's restriction and point.
+  Read-only text outside the visible region still fails safely with recovery.
+- **TCP chunking does not change WebSocket acceptance:** legal coalesced messages
+  and a handshake followed by data are fed to the upstream parser incrementally;
+  incomplete-frame, message and fragment limits remain enforced.
+- **Transcript metadata is bounded:** separate segment-count, per-ID byte and
+  total-ID byte budgets reject excessive metadata, including empty-text segments,
+  before retaining it. Previously accepted transcript text remains recoverable.
+
 - **CLI fixture completion:** integration tests service the whole event loop so
   an exited stdout process cannot starve its final sentinel notification.
 - **Clean package installation:** descriptor and development helpers remain

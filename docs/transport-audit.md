@@ -90,6 +90,36 @@ still assigns `open` and attempts its open callback (785-815). Vox latches close
 before notifying Core, suppressing that later open. A premature close is an
 error at the provider/Core layer, never authoritative ASR completion.
 
+## Input chunking correction - 2026-10-20
+
+The original pre-parse bound compared the entire incoming callback plus retained
+bytes against one message's budget. That rejected legal messages when TCP
+coalesced them. The corrected guard probes bounded prefixes and delivers at most
+one complete frame per upstream-filter call; message acceptance no longer depends
+on process-filter chunk boundaries.
+
+- Handshake input is capped at 16 KiB and stops exactly at the header terminator.
+  If the same callback contains data, the next iteration applies the open-frame
+  budget instead of continuing under the larger handshake allowance.
+- Data-frame wire prefixes stay within `vox-transport-max-message-bytes + 14`;
+  control frames use the protocol's 125-byte payload budget plus 14 header bytes.
+  The existing fragment-message size and count checks remain separate.
+- `websocket-get-opcode`, `websocket-read-frame` and `websocket-frame-length` are
+  additional upstream implementation dependencies, checked before connecting.
+  The guard reuses them to find boundaries; it does not implement frame decoding.
+- Probe size grows geometrically from a small prefix, avoiding a message-sized
+  copy for every tiny frame in a large callback. The original upstream filter
+  parses the admitted prefix again. This adds bounded parsing/copying overhead;
+  byte-at-a-time delivery still inherits upstream repeated-concatenation costs.
+- Each iteration rechecks liveness. A message callback that closes the session
+  prevents later data delivery and automatic ping replies in that same callback.
+
+The transport-only suite now passes 29 tests, including all 65 split positions
+for two small frames, 1000 coalesced messages, a handshake followed by 600 frames,
+control payload boundaries, byte-split masked extended frames, exact 16 KiB
+handshakes, overflow rejection, and reentrant close. These remain offline tests
+using the real upstream parser and a mocked native stream, not live TLS proof.
+
 ## TLS and privacy
 
 - Only `wss` URLs are accepted. Userinfo, URL fragments, CR/LF/NUL, and header
