@@ -265,13 +265,6 @@
     (should (eq (plist-get json :nullvalue) :null))
     (should (eq (plist-get json :falsevalue) :false))))
 
-(ert-deftest vox-security-auth-source-precedes-env ()
-  :tags '(vox-unit)
-  (cl-letf (((symbol-function 'auth-source-search)
-             (lambda (&rest _) (list (list :secret (lambda () "auth-secret")))))
-            ((symbol-function 'getenv) (lambda (_) "env-secret")))
-    (should (equal (vox-secret "host" "ENV") "auth-secret"))))
-
 (ert-deftest vox-core-reentrant-finish-commits-once ()
   :tags '(vox-unit)
   (vox-test-session

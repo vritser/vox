@@ -82,7 +82,7 @@ add new results rather than silently changing the meaning of old evidence.
 
 ## Postmortems (decision records)
 
-[Postmortems](postmortems/README.md) preserve the historical why; current
+[Postmortems](postmortems/) preserve the historical why; current
 behavior belongs in the guides, and measured results belong with the change that
 produced them (commit message or test output). Use the
 [template](postmortems/000-template.md) for short, numbered records.
@@ -97,9 +97,9 @@ produced them (commit message or test output). Use the
   of private data. Do not invent historical alternatives or incident impact.
 - Cite actual commits and relative source/test/evidence links. Label uncommitted
   work against its base commit; distinguish offline coverage from live acceptance.
-- Add each record to the index and link user-visible changelog entries back to it
-  with a rationale link. Keep setup instructions in the guides and test-run
-  details with the change, rather than duplicating them here.
+- Name each record with the next unused number and link user-visible changelog
+  entries back to it with a rationale link. Keep setup instructions in the guides
+  and test-run details with the change, rather than duplicating them here.
 - Preserve historical bodies. A superseding decision gets a new numbered record
   and a short linked "Superseded by NNN" note on the old one, not a rewrite.
 

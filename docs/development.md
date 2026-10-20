@@ -151,7 +151,7 @@ refactor does not establish new provider acceptance.
 
 ### Postmortems as decision records
 
-Read relevant [postmortems](../postmortems/README.md) before significant changes,
+Read relevant [postmortems](../postmortems/) before significant changes,
 then verify the code still matches the assumptions. For workflow, architecture,
 public-surface removal, or deliberately deferred behavior decisions, start from
 [the template](../postmortems/000-template.md) and follow the
@@ -159,8 +159,7 @@ public-surface removal, or deliberately deferred behavior decisions, start from
 still need regression tests, but do not automatically need a decision record.
 
 Keep records short, numbered and evidence-backed. Add a rationale link from the
-corresponding changelog entry and an entry in the postmortem index. Cite real
-commits, or explicitly identify uncommitted work and its base; do not recast a
-potential failure as an observed incident. Superseding decisions get a new record
-and a linked note on the old one. The guides explain current behavior and records
-explain historical choices.
+corresponding changelog entry. Cite real commits, or explicitly identify
+uncommitted work and its base; do not recast a potential failure as an observed
+incident. Superseding decisions get a new record and a linked note on the old
+one. The guides explain current behavior and records explain historical choices.

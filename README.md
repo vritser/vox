@@ -87,37 +87,45 @@ does not make arbitrary OpenAI-compatible HTTP APIs supported.
 
 ## API key configuration
 
-Unless the backend supplies an explicit `:key` function, Vox reads `auth-source`
-first, then the provider's environment variable. It does
-not load a `.env` file. An existing `auth-source` key takes priority over an
-environment key; configure the account and region you actually use. The default
-environment names below have no legacy aliases or automatic fallback.
+By default Vox reads `auth-source` for the host being connected, using login
+`apikey`; it does not read environment variables or load a `.env` file. Supply
+`:key` to use a literal key or another source:
 
-| Backend / region | Environment variable | `auth-source` host |
-| --- | --- | --- |
-| Qwen, Beijing (default) | `VOX_QWEN_API_KEY` | `dashscope.aliyuncs.com` |
-| Qwen, Singapore | `VOX_QWEN_API_KEY` | `dashscope-intl.aliyuncs.com` |
-| Doubao (experimental) | `VOX_DOUBAO_API_KEY` | `openspeech.bytedance.com` |
+```elisp
+;; Literal key (visible in your init file and in `C-h v vox-backend')
+(setq vox-backend (vox-make-qwen "DashScope" :key "sk-..."))
+
+;; Any other source, including the environment
+(setq vox-backend
+      (vox-make-qwen "DashScope"
+        :key (lambda () (getenv "MY_ASR_KEY"))))
+```
+
+A literal key is convenient for a quick trial, but it is visible in your
+configuration, `C-h v vox-backend`, and any backtrace that prints the backend.
+Prefer auth-source or a function for a key you keep.
+
+| Backend / region | `auth-source` host |
+| --- | --- |
+| Qwen, Beijing (default) | `dashscope.aliyuncs.com` |
+| Qwen, Singapore | `dashscope-intl.aliyuncs.com` |
+| Doubao (experimental) | `openspeech.bytedance.com` |
 
 ### Try it in the current Emacs session
 
 For Qwen, press `M-:` and evaluate this expression, then enter your key at the
-masked prompt. The expression does not contain or print the key:
+masked prompt. The key stays in the backend object for this session and is not
+written to a file:
 
 ```elisp
-(progn
-  (setenv "VOX_QWEN_API_KEY" (read-passwd "DashScope API key: "))
-  (message "Vox: Qwen API key configured"))
+(setq vox-backend
+      (vox-make-qwen "DashScope"
+        :key (read-passwd "DashScope API key: ")))
 ```
 
-This sets the environment of the running Emacs, including GUI Emacs, until it
-exits. The message confirms local configuration, not successful authentication.
-For Doubao, use `VOX_DOUBAO_API_KEY` instead and configure
-`(setq vox-backend (vox-make-doubao "SeedASR") vox-model 'bigmodel)`;
-check its [resource ID and experimental status](docs/customization.md#doubao-experimental).
-If you supply environment variables outside Emacs, set them before launching
-Emacs. A running Emacs does not pick up later terminal exports, and GUI Emacs
-may not inherit the terminal's environment.
+For Doubao, construct `(vox-make-doubao "SeedASR")` the same way and check its
+[resource ID and experimental status](docs/customization.md#doubao-experimental).
+`C-h v vox-backend` reveals the key, so replace or clear it when you are done.
 
 ### Keep a key across restarts (recommended)
 
@@ -141,8 +149,9 @@ machine openspeech.bytedance.com login apikey password YOUR_DOUBAO_API_KEY
 Save it encrypted using Emacs/GnuPG; this requires a working GnuPG setup. Keep
 only the entries you need. The host must match the selected endpoint, and the
 login must be `apikey`. After changing an entry, run
-`M-x auth-source-forget-all-cached` before retrying. Do not put real keys in your
-Emacs config, repository, shell history, or issue reports. See the
+`M-x auth-source-forget-all-cached` before retrying. Prefer auth-source for a key
+you keep: an init file or `:key` literal is readable by anything that prints the
+configuration. Never commit a real key or include one in an issue report. See the
 [credential and region guide](docs/customization.md#credentials-and-regions)
 for endpoint selection.
 
@@ -181,7 +190,7 @@ See [transport and privacy limits](docs/customization.md#queueing-transport-and-
 - [Architecture](docs/architecture.md): module ownership and boundaries.
 - [Protocol audit](docs/protocol-audit.md), [transport audit](docs/transport-audit.md),
   and [fixture provenance](test/fixtures/README.md): evidence and open questions.
-- [Postmortems](postmortems/README.md): historical decisions, tradeoffs, and limitations.
+- [Postmortems](postmortems/): historical decisions, tradeoffs, and limitations.
 - [Changelog](CHANGELOG.md): unreleased changes.
 
 ## Contributing

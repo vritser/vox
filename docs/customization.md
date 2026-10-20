@@ -167,44 +167,54 @@ query parameter, including on custom endpoints; it is never ignored just because
 a custom endpoint is supplied. Doubao sends the selected ID in `model_name` and
 also accepts the separate `:resource-id` entitlement/billing option.
 
-Omit `:key` (or use nil) for the default auth-source/environment behavior below.
-For a custom credential source, provide a zero-argument function, not a plaintext
-key string. It is called only when connecting, after endpoint approval:
+`:key` accepts three forms. nil (the default) reads `auth-source` for the host
+being connected, using login `apikey`, and signals an error when no entry is
+stored. A string is used as the literal key. A zero-argument function is called
+only when connecting, after endpoint approval; this is the explicit way to use an
+environment variable or another store:
 
 ```elisp
 (setq vox-backend
       (vox-make-qwen "Custom credential source"
         :key (lambda () (getenv "MY_ASR_KEY"))))
+
+(setq vox-backend
+      (vox-make-qwen "Quick literal"
+        :key "sk-..."))
 ```
 
-An explicit `:key` function replaces default credential lookup; it has no hidden
-fallback. The result is checked for empty values and header control characters,
-and callback errors are redacted. Do not capture a literal key in a saved lambda.
-Backend/model configuration is copied before startup callbacks and the device
-picker. Editing the original object or selecting another model affects the next
-recording, not an active one. Canceling during credential acquisition tears down
-the pending session without opening transport afterward.
+A literal key is visible in the initialization file, `C-h v vox-backend`, and any
+backtrace that prints the configuration; prefer auth-source or a function for a
+key you keep. `vox-api-key-from-auth-source` is the same lookup as the nil
+default, exposed for a different host or user:
+`(lambda () (vox-api-key-from-auth-source "proxy.example" "me"))`.
+
+Key results are checked for empty values and header control characters, and
+function errors are redacted. Backend/model configuration is copied before
+startup callbacks and the device picker. Editing the original object or selecting
+another model affects the next recording, not an active one. Canceling during
+credential acquisition tears down the pending session without opening transport
+afterward.
 
 **Direct migration:** remove uses of `vox-qwen-model`, `vox-qwen-endpoint`,
 `vox-doubao-endpoint`, `vox-doubao-resource-id`, and
 `vox-doubao-key-environment`. There are no compatibility aliases. Move their
 settings into the constructor and `vox-model`; use a `:key` function for a custom
-environment name. Update your init and restart Emacs rather than mixing old
-loaded adapter definitions with the new configuration API. Audio-device,
-silence-detection, language/VAD, and packet-size options are unchanged. The
-self-recording CLI remains `(setq vox-backend 'cli)` and manages its own model.
-Built-in `qwen`/`doubao` registry symbols still select factory defaults, but custom
-API configuration uses objects.
+environment name. The `VOX_QWEN_API_KEY` / `VOX_DOUBAO_API_KEY` variables are no
+longer read; use auth-source or `:key (lambda () (getenv ...))`. Update your init
+and restart Emacs rather than mixing old loaded adapter definitions with the new
+configuration API. Audio-device, silence-detection, language/VAD, and packet-size
+options are unchanged. The self-recording CLI remains `(setq vox-backend 'cli)`
+and manages its own model. Built-in `qwen`/`doubao` registry symbols still select
+factory defaults, but custom API configuration uses objects.
 
 ## Credentials and regions
 
-The [README API key setup](../README.md#api-key-configuration) includes a masked
-prompt for the current Emacs session and a complete encrypted-file setup. Neither
-method requires placing a real key in your Emacs configuration or repository.
-
-Secrets resolve through `auth-source` first (host matching the endpoint, user
-`apikey`), then the provider environment variable. Prefer an encrypted auth-source
-file configured outside this repository. Example structure, **not real keys**:
+The [README API key setup](../README.md#api-key-configuration) covers a masked
+in-session key and an encrypted-file setup. `:key nil` reads `auth-source` for
+the host matching the endpoint, using user `apikey`. Prefer an encrypted
+auth-source file configured outside this repository. Example structure, **not
+real keys**:
 
 ```text
 machine dashscope.aliyuncs.com login apikey password YOUR_KEY
@@ -213,14 +223,13 @@ machine openspeech.bytedance.com login apikey password YOUR_KEY
 ```
 
 Keep only the entries for endpoints you use. When changing a stored entry, run
-`M-x auth-source-forget-all-cached` before retrying; an existing auth-source key
-takes priority over environment variables.
+`M-x auth-source-forget-all-cached` before retrying.
 
-Alternatively provide `VOX_QWEN_API_KEY` or `VOX_DOUBAO_API_KEY` in the environment
-that starts Emacs. Do not put real keys in shell history, source code, issues,
-or command-line arguments. GUI Emacs may not inherit your terminal's environment.
-There are no legacy-name aliases or automatic fallbacks. For a different
-credential source, configure the backend's explicit `:key` function.
+Vox does not read `VOX_QWEN_API_KEY`, `VOX_DOUBAO_API_KEY`, or any other
+environment variable itself. A `:key` function makes such a lookup explicit:
+`(lambda () (getenv "MY_ASR_KEY"))`. Do not put real keys in shell history,
+source code, issues, or command-line arguments. GUI Emacs may not inherit your
+terminal's environment.
 
 ### Qwen
 

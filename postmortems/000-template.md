@@ -41,7 +41,7 @@ body to claim the new behavior was always present.
 
 ---
 
-Use the [writing rules and index](README.md#writing-and-maintaining-records).
+Use the [writing rules](../AGENTS.md#postmortems-decision-records).
 Keep the finished record about one page; remove these instructional paragraphs
 when filling it in. Current setup belongs in the configuration guide, and test
 run details belong with the change that produced them, not duplicated here.

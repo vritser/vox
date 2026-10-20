@@ -57,8 +57,9 @@ WHAT names the field in the error message, defaulting to \"identifier\"."
 
 (defun vox-backend-snapshot (backend)
   "Validate and copy BACKEND so later external mutation cannot affect it.
-Registered protocol symbols remain symbols.  Key functions retain identity
-and are never invoked here.  Configuration records contain no resolved key."
+Registered protocol symbols remain symbols.  A literal key string is copied,
+key functions retain identity, and neither is invoked here.  Configuration
+records contain no resolved key."
   (if (symbolp backend)
       backend
     (unless (vox-backend-p backend)
@@ -72,9 +73,13 @@ and are never invoked here.  Configuration records contain no resolved key."
       (user-error "Invalid Vox backend host"))
     (unless (vox--backend-endpoint-p (vox-backend-endpoint backend))
       (user-error "Invalid Vox backend endpoint"))
-    (unless (or (null (vox-backend-key backend))
-                (functionp (vox-backend-key backend)))
-      (user-error "Invalid Vox backend key"))
+    (let ((key (vox-backend-key backend)))
+      (unless (or (null key)
+                  (and (stringp key)
+                       (not (string-empty-p key))
+                       (not (string-match-p "[\x00-\x1f\x7f-\x9f]" key)))
+                  (functionp key))
+        (user-error "Invalid Vox backend key")))
     (unless (and (proper-list-p (vox-backend-models backend))
                  (vox-backend-models backend))
       (user-error "Invalid Vox backend models"))
@@ -82,6 +87,7 @@ and are never invoked here.  Configuration records contain no resolved key."
           (models (mapcar (lambda (model)
                             (vox--backend-id model "model identifier"))
                           (vox-backend-models backend)))
+          (key (vox-backend-key backend))
           (resource (vox-backend-resource-id backend)))
       (unless (= (length models) (length (delete-dups (copy-sequence models))))
         (user-error "Duplicate Vox model identifier"))
@@ -94,7 +100,8 @@ and are never invoked here.  Configuration records contain no resolved key."
        :type (vox-backend-type backend)
        :host (copy-sequence (vox-backend-host backend))
        :endpoint (copy-sequence (vox-backend-endpoint backend))
-       :models models :key (vox-backend-key backend)
+       :models models
+       :key (if (stringp key) (copy-sequence key) key)
        :resource-id (and resource (copy-sequence resource))))))
 
 ;;;###autoload
@@ -104,8 +111,8 @@ and are never invoked here.  Configuration records contain no resolved key."
           (models '(qwen3-asr-flash-realtime)) key)
   "Make a Qwen configuration named NAME without resolving credentials.
 NAME is a display string.  HOST and ENDPOINT select the WSS destination.
-MODELS lists allowed model IDs.  KEY is nil for auth-source/environment
-lookup, or a zero-argument function.
+MODELS lists allowed model IDs.  KEY is nil for auth-source lookup, a literal
+key string, or a zero-argument function.
 
 (fn NAME &key HOST ENDPOINT MODELS KEY)"
   (vox-backend-snapshot
@@ -119,8 +126,9 @@ lookup, or a zero-argument function.
           key (resource-id "volc.seedasr.sauc.duration"))
   "Make a Doubao configuration named NAME without resolving credentials.
 NAME is a display string.  HOST and ENDPOINT select the WSS destination;
-MODELS lists allowed model IDs.  KEY is nil or a zero-argument function.
-RESOURCE-ID selects the billing resource.
+MODELS lists allowed model IDs.  KEY is nil for auth-source lookup, a literal
+key string, or a zero-argument function.  RESOURCE-ID selects the billing
+resource.
 
 (fn NAME &key HOST ENDPOINT MODELS KEY RESOURCE-ID)"
   (vox-backend-snapshot
@@ -223,33 +231,30 @@ its configured endpoint; its adapter sends the model in JSON instead."
                                          "&")))))
     (concat "wss://" (vox-backend-host configuration) endpoint)))
 
-(defun vox--backend-environment (configuration)
-  "Return the default credential environment variable for CONFIGURATION."
-  (pcase (vox-backend-type configuration)
-    ('qwen "VOX_QWEN_API_KEY")
-    ('doubao "VOX_DOUBAO_API_KEY")
-    (_ (user-error "Invalid Vox credential configuration"))))
+(defvar vox--auth-source-host nil
+  "Host of the backend whose `:key' function is being resolved.")
 
 (defun vox-backend-secret (configuration host)
   "Resolve CONFIGURATION's credential lazily for HOST, without caching it.
-A nil key uses `vox-secret' and the protocol's default environment variable.
-A function key is called only here, after endpoint approval, and is the only
-path that does not need an environment name.  Key errors are sanitized; quit
+A string key is returned as the literal credential.  A function key is called
+only here, after endpoint approval, with `vox--auth-source-host' bound to HOST.
+A nil key reads auth-source for HOST.  Key-function errors are sanitized; quit
 propagates."
   (setq configuration (vox-backend-snapshot configuration))
   (unless (and (vox-backend-p configuration) (vox--backend-host-p host))
     (user-error "Invalid Vox backend configuration"))
   (let* ((key (vox-backend-key configuration))
          (value
-          (if key
-              (condition-case nil (funcall key)
-                (error (user-error "Vox credential unavailable")))
-            (let ((environment (vox--backend-environment configuration)))
-              ;; Keep the safe environment hint, but not foreign error text.
-              (condition-case nil (vox-secret host environment)
-                (error (user-error
-                        "Vox credential unavailable; configure auth-source or %s"
-                        environment)))))))
+          (cond ((stringp key) key)
+                (key (let ((vox--auth-source-host host))
+                       (condition-case nil (funcall key)
+                         (error (user-error "Vox credential unavailable")))))
+                ;; Keep the host in the hint, but not foreign error text.
+                (t (condition-case nil (vox-api-key-from-auth-source host)
+                     (error
+                      (user-error
+                       "No Vox auth-source API key for %s; configure auth-source or :key"
+                       host)))))))
     (unless (and (stringp value) (not (string-empty-p value))
                  (not (string-match-p "[\x00-\x1f\x7f-\x9f]" value)))
       (user-error "Vox credential is empty or contains control characters"))
@@ -265,21 +270,31 @@ propagates."
   (json-parse-string string :object-type 'plist :array-type 'list
                      :null-object :null :false-object :false))
 
-(defun vox-secret (host environment)
-  "Resolve secret for HOST, preferring auth-source over ENVIRONMENT.
-Use an auth-source entry with user `apikey'.  Never print the returned value."
+(defun vox--auth-source-value (host user)
+  "Return the auth-source secret for HOST and USER, or nil.
+USER defaults to \"apikey\".  A function secret is invoked and its errors are
+ignored.  Auth-source diagnostics stay disabled."
   (let* ((auth-source-debug nil)
-         (entry (car (auth-source-search :host host :user "apikey"
+         (entry (car (auth-source-search :host host :user (or user "apikey")
                                          :require '(:secret) :max 1)))
-         (secret (plist-get entry :secret))
-         (value (condition-case nil
-                    (if (functionp secret) (funcall secret) secret)
-                  (error nil))))
-    (setq value (or value (getenv environment)))
-    (unless (and (stringp value) (not (string-empty-p value))
-                 (not (string-match-p "[\r\n]" value)))
-      (user-error "Vox credential unavailable; configure auth-source or %s" environment))
-    value))
+         (secret (plist-get entry :secret)))
+    (condition-case nil
+        (if (functionp secret) (funcall secret) secret)
+      (error nil))))
+
+(defun vox-api-key-from-auth-source (&optional host user)
+  "Return the auth-source API key for HOST, defaulting to the connecting host.
+USER defaults to \"apikey\".  A nil `:key' uses this same lookup for the
+connecting host; pass this function explicitly only to select a different host
+or user.  Signal `user-error' when no usable key is stored.  Vox itself never
+reads environment variables."
+  (let ((host (or host vox--auth-source-host)))
+    (unless (and (stringp host) (not (string-empty-p host)))
+      (user-error "No Vox host for auth-source lookup"))
+    (let ((value (vox--auth-source-value host user)))
+      (unless (and (stringp value) (not (string-empty-p value)))
+        (user-error "No Vox auth-source API key for %s" host))
+      value)))
 
 (defun vox-check-endpoint (url official-hosts)
   "Validate WSS URL; ask before sending data outside OFFICIAL-HOSTS.

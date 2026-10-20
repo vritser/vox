@@ -2,6 +2,10 @@
 
 _Date: 2026-10-20. Status: Implemented, uncommitted work based on `3afd60c`._
 
+> Credential handling is superseded by [004](004-key-sources.md): `:key` now
+> accepts a literal string and the default reads auth-source only, with no
+> environment fallback.
+
 ## Background
 
 Provider API addresses, models and credential-source settings were spread across

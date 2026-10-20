@@ -4,7 +4,7 @@
 
 ### Added
 
-- **Historical decision records:** a [postmortem index and template](postmortems/README.md)
+- **Historical decision records:** the [postmortem record set and template](postmortems/)
   preserve the rationale for silence stopping, explicit device selection, and
   backend/model configuration. Contributor rules cover when to write a record,
   evidence links, and supersession without rewriting historical conclusions.
@@ -12,6 +12,15 @@
 - **Optional coverage report:** `scripts/check-coverage.el` instruments production
   modules with testcover, runs the offline suite, and lists definitions below 80%
   coverage. It is diagnostic and stays outside `scripts/verify.sh`.
+
+- **Simpler credential sources (breaking):** `:key` accepts nil, a literal key
+  string, or a zero-argument function. nil reads `auth-source` for the connecting
+  host and no longer falls back to `VOX_QWEN_API_KEY` / `VOX_DOUBAO_API_KEY`; Vox
+  reads no environment variables itself, and `vox-secret` is removed. Use
+  `:key (lambda () (getenv "..."))` to keep an environment lookup explicit.
+  `vox-api-key-from-auth-source` remains for an explicit host or user. A literal
+  key is visible in the initialization file and `C-h v vox-backend`.
+  (rationale: [postmortem 004](postmortems/004-key-sources.md)).
 
 - **Backend objects and model selection (breaking configuration change):**
   `vox-make-qwen` / `vox-make-doubao` group host, endpoint, available models,
