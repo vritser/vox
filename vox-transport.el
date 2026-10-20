@@ -35,6 +35,9 @@ blocked process-send-string and is not strict network backpressure."
 (declare-function websocket-ready-state "websocket" (ws))
 (declare-function websocket-conn "websocket" (ws))
 (declare-function websocket-inflight-input "websocket" (ws))
+(declare-function websocket-get-opcode "websocket" (bytes))
+(declare-function websocket-read-frame "websocket" (bytes))
+(declare-function websocket-frame-length "websocket" (frame))
 (declare-function websocket-frame-payload "websocket" (frame))
 (declare-function websocket-frame-opcode "websocket" (frame))
 (declare-function websocket-frame-completep "websocket" (frame))
@@ -122,7 +125,9 @@ implemented here; the upstream handshake function still does all of it."
                (cl-every #'fboundp
                          '(websocket-open websocket-send websocket-send-text
                            websocket-close websocket-ready-state websocket-conn
-                           websocket-inflight-input websocket-frame-payload
+                           websocket-inflight-input websocket-get-opcode
+                           websocket-read-frame websocket-frame-length
+                           websocket-frame-payload
                            websocket-frame-opcode websocket-frame-completep
                            make-websocket-frame websocket-ensure-handshake))
                (or (advice-member-p #'vox-transport--handshake 'websocket-ensure-handshake)
@@ -189,6 +194,58 @@ implemented here; the upstream handshake function still does all of it."
           (error "Invalid UTF-8 text frame"))
         (funcall on-message text kind)))))
 
+(defun vox-transport--feed-input (context filter process bytes)
+  "Feed BYTES to upstream FILTER for PROCESS within CONTEXT's wire budget.
+Probe bounded prefixes with the upstream parser, then deliver at most one
+frame per call so application callbacks can close before any later frame.
+The filter parses that prefix again; no RFC decoding is duplicated here.
+HTTP parsing and all WebSocket decoding remain upstream responsibilities."
+  (unless (and (stringp bytes) (not (multibyte-string-p bytes)))
+    (error "WebSocket input must be binary"))
+  (let ((ws (vox-transport--context-websocket context))
+        (offset 0))
+    (while (and (< offset (length bytes)) (vox-transport--live-p context)
+                (memq (websocket-ready-state ws) '(connecting open)))
+      (let* ((pending (websocket-inflight-input ws))
+             (retained (length pending))
+             (connecting (eq (websocket-ready-state ws) 'connecting))
+             (control (and (not connecting)
+                           (memq (websocket-get-opcode
+                                  (if (> retained 0) pending
+                                    (substring bytes offset (1+ offset))))
+                                 '(ping pong close))))
+             ;; Control frames have a protocol limit, not an application
+             ;; message limit.  Allow the largest possible wire header too.
+             (limit (if connecting 16384
+                      (+ 14 (if control 125 vox-transport-max-message-bytes))))
+             ;; Geometric growth avoids copying a message-sized prefix for
+             ;; every tiny frame in a large callback, while bounding larger probes.
+             (target (if connecting limit (min limit (max 14 (* 2 retained)))))
+             (end (min (length bytes) (+ offset (- target retained)))))
+        (when (<= end offset)
+          (error "WebSocket input limit exceeded"))
+        (let* ((candidate (concat pending (substring bytes offset end)))
+               (boundary
+                (if connecting
+                    (when-let* ((header-end (string-match "\r\n\r\n" candidate)))
+                      (+ header-end 4))
+                  (when-let* ((frame (websocket-read-frame candidate)))
+                    (when (> (length (websocket-frame-payload frame))
+                             (if control 125 vox-transport-max-message-bytes))
+                      (error "WebSocket frame limit exceeded"))
+                    (websocket-frame-length frame)))))
+          (when boundary
+            (setq end (+ offset (- boundary retained))))
+          (unless (> end offset)
+            (error "WebSocket parser made no progress"))
+          (funcall filter process (substring bytes offset end))
+          (setq offset end)
+          ;; A valid maximum-sized frame/header must be complete at this
+          ;; boundary.  Reject without ever admitting another byte upstream.
+          (when (and (vox-transport--live-p context)
+                     (>= (length (websocket-inflight-input ws)) limit))
+            (error "WebSocket input limit exceeded")))))))
+
 (defun vox-transport--wrap-process (context)
   "Protect CONTEXT's upstream filter and sentinel before asynchronous I/O."
   (let* ((process (vox-transport--context-process context))
@@ -202,16 +259,7 @@ implemented here; the upstream handshake function still does all of it."
        (let ((websocket-debug nil) (websocket-callback-debug-on-error nil))
          (condition-case nil
              (when (vox-transport--live-p context)
-               ;; Upstream retains incomplete wire frames before on-message.
-               ;; Bound that storage too, not only completed fragment payloads.
-               (let* ((ws (vox-transport--context-websocket context))
-                      (limit (if (eq (websocket-ready-state ws) 'connecting)
-                                 16384 (+ 14 vox-transport-max-message-bytes))))
-                 (unless (and (stringp bytes) (not (multibyte-string-p bytes))
-                              (<= (+ (length bytes)
-                                     (length (websocket-inflight-input ws))) limit))
-                   (error "WebSocket input limit exceeded")))
-               (funcall filter proc bytes))
+               (vox-transport--feed-input context filter proc bytes))
            (error (vox-transport--fail context "WebSocket input rejected or callback failed"))))))
     (set-process-sentinel
      process

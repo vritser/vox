@@ -127,6 +127,172 @@
       (should-not (multibyte-string-p (caar (last messages)))))
     (should-not errors)))
 
+(ert-deftest vox-transport-message-limit-independent-of-tcp-chunks ()
+  :tags '(vox-unit)
+  ;; Synthetic frames: test every split, including one coalesced callback.
+  (let* ((vox-transport-max-message-bytes 32)
+         (payload (make-string 30 ?x)))
+    (skip-unless (require 'websocket nil t))
+    (let ((wire (concat (vox-transport-test--wire 'text payload t)
+                        (vox-transport-test--wire 'binary payload t))))
+      (dotimes (split (1+ (length wire)))
+        (vox-transport-test--connection
+          (vox-transport-test--upgrade)
+          (funcall (process-filter socket) socket (substring wire 0 split))
+          (funcall (process-filter socket) socket (substring wire split))
+          (should-not errors)
+          (should (equal messages (list (list payload 'binary)
+                                       (list payload 'text)))))))))
+
+(ert-deftest vox-transport-large-coalesced-batch-is-bounded ()
+  :tags '(vox-unit)
+  (vox-transport-test--connection
+    (vox-transport-test--upgrade)
+    (let* ((vox-transport-max-message-bytes 32)
+           (wire (vox-transport-test--wire 'text (make-string 30 ?x) t))
+           (reader (symbol-function 'websocket-read-frame))
+           (largest 0))
+      (cl-letf (((symbol-function 'websocket-read-frame)
+                 (lambda (input)
+                   (setq largest (max largest (length input)))
+                   (funcall reader input))))
+        (funcall (process-filter socket) socket
+                 (apply #'concat (make-list 1000 wire))))
+      (should (<= largest (+ 14 vox-transport-max-message-bytes)))
+      (should (= (length messages) 1000))
+      (should-not errors))))
+
+(ert-deftest vox-transport-handshake-and-first-frames-coalesced ()
+  :tags '(vox-unit)
+  (vox-transport-test--connection
+    (setq network-status 'open)
+    (funcall (process-sentinel socket) socket "open")
+    (let* ((vox-transport-max-message-bytes 32)
+           (wire (vox-transport-test--wire 'text (make-string 30 ?x) t))
+           (header (concat "HTTP/1.1 101 Switching Protocols\r\n"
+                           "Upgrade: websocket\r\nConnection: upgrade\r\n"
+                           "Sec-WebSocket-Accept: " (websocket-accept-string ws)
+                           "\r\n\r\n")))
+      ;; The callback exceeds the handshake budget, but the header does not.
+      (funcall (process-filter socket) socket (substring header 0 (- (length header) 2)))
+      (funcall (process-filter socket) socket
+               (concat (substring header -2) (apply #'concat (make-list 600 wire))))
+      (should (equal opened '(t)))
+      (should (= (length messages) 600))
+      (should-not errors))))
+
+(ert-deftest vox-transport-handshake-transition-recomputes-wire-budget ()
+  :tags '(vox-unit)
+  (vox-transport-test--connection
+    (setq network-status 'open)
+    (funcall (process-sentinel socket) socket "open")
+    (let ((vox-transport-max-message-bytes 4)
+          (reader (symbol-function 'websocket-read-frame))
+          (largest 0))
+      (cl-letf (((symbol-function 'websocket-read-frame)
+                 (lambda (input)
+                   (setq largest (max largest (length input)))
+                   (funcall reader input))))
+        (funcall (process-filter socket) socket
+                 (concat "HTTP/1.1 101 Switching Protocols\r\n"
+                         "Upgrade: websocket\r\nConnection: upgrade\r\n"
+                         "Sec-WebSocket-Accept: " (websocket-accept-string ws) "\r\n\r\n"
+                         (substring (vox-transport-test--wire
+                                     'binary (make-string 1000 ?x) t) 0 500))))
+      (should (<= largest (+ 14 vox-transport-max-message-bytes)))
+      (should-not messages)
+      (should (= (length errors) 1)))))
+
+(ert-deftest vox-transport-control-payload-has-independent-limit ()
+  :tags '(vox-unit)
+  (vox-transport-test--connection
+    (vox-transport-test--upgrade)
+    (let ((vox-transport-max-message-bytes 4))
+      (funcall (process-filter socket) socket
+               (concat (vox-transport-test--wire 'text "a" nil)
+                       (vox-transport-test--wire 'ping (make-string 125 ?p) t)
+                       (vox-transport-test--wire 'pong (make-string 125 ?p) t)
+                       (vox-transport-test--wire 'continuation "b" t))))
+    (should (equal messages '(("ab" text))))
+    (should (= (length writes) 2))
+    (should-not errors)))
+
+(ert-deftest vox-transport-control-payload-over-limit-rejected ()
+  :tags '(vox-unit)
+  (vox-transport-test--connection
+    (vox-transport-test--upgrade)
+    (funcall (process-filter socket) socket
+             (vox-transport-test--wire 'pong (make-string 126 ?p) t))
+    (should (= (length errors) 1))
+    (should-not messages)))
+
+(ert-deftest vox-transport-callback-close-stops-coalesced-input ()
+  :tags '(vox-unit)
+  (vox-transport-test--connection
+    (vox-transport-test--upgrade)
+    (let ((callback (symbol-function 'vox-transport--frame))
+          (reader (symbol-function 'websocket-read-frame))
+          (after-close 0))
+      (cl-letf (((symbol-function 'vox-transport--frame)
+                 (lambda (&rest args)
+                   (apply callback args)
+                   (vox-transport-close session)))
+                ((symbol-function 'websocket-read-frame)
+                 (lambda (input)
+                   (when (and (not (vox-session-websocket session))
+                              (> (length input) 0))
+                     (cl-incf after-close))
+                   (funcall reader input))))
+        (funcall (process-filter socket) socket
+                 (concat (vox-transport-test--wire 'text "first" t)
+                         (vox-transport-test--wire 'text "second" t)
+                         (vox-transport-test--wire 'ping "late" t))))
+      (should (zerop after-close)))
+    (should (equal messages '(("first" text))))
+    (should (= (length writes) 1))
+    (should-not errors)))
+
+(ert-deftest vox-transport-handshake-wire-limit-retained ()
+  :tags '(vox-unit)
+  (vox-transport-test--connection
+    (funcall (process-filter socket) socket (make-string 16385 ?x))
+    (should-not opened)
+    (should-not messages)
+    (should (= (length errors) 1))
+    (should (<= (length (websocket-inflight-input ws)) 16384))))
+
+(ert-deftest vox-transport-handshake-exact-wire-limit-opens ()
+  :tags '(vox-unit)
+  (vox-transport-test--connection
+    (setq network-status 'open)
+    (funcall (process-sentinel socket) socket "open")
+    (let* ((vox-transport-max-message-bytes 1)
+           (header (concat "HTTP/1.1 101 Switching Protocols\r\n"
+                           "Upgrade: websocket\r\nConnection: upgrade\r\n"
+                           "Sec-WebSocket-Accept: " (websocket-accept-string ws)
+                           "\r\nX-Padding: "))
+           (wire (concat header (make-string (- 16384 (length header) 4) ?x)
+                         "\r\n\r\n" (vox-transport-test--wire 'text "x" t))))
+      (funcall (process-filter socket) socket wire)
+      (should (equal opened '(t)))
+      (should (equal messages '(("x" text))))
+      (should-not errors))))
+
+(ert-deftest vox-transport-bytewise-masked-max-frame ()
+  :tags '(vox-unit)
+  (vox-transport-test--connection
+    (vox-transport-test--upgrade)
+    (let* ((vox-transport-max-message-bytes 126)
+           (payload (make-string 126 ?x))
+           (wire (concat (websocket-encode-frame
+                          (make-websocket-frame :opcode 'binary :payload payload
+                                                :completep t) t)
+                         (vox-transport-test--wire 'text "next" t))))
+      (dotimes (index (length wire))
+        (funcall (process-filter socket) socket (substring wire index (1+ index))))
+      (should (equal messages (list '("next" text) (list payload 'binary))))
+      (should-not errors))))
+
 (ert-deftest vox-transport-orphan-continuation-is-safe-error ()
   :tags '(vox-unit)
   (vox-transport-test--connection
