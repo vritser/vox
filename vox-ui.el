@@ -15,8 +15,11 @@
   "Return safe one-line preview columns at SESSION's captured marker."
   (let* ((buffer (vox-session-target-buffer session))
          (column (with-current-buffer buffer
-                   (save-excursion (goto-char (vox-session-target-marker session))
-                                   (current-column))))
+                   (save-excursion
+                     (save-restriction
+                       (widen)
+                       (goto-char (vox-session-target-marker session))
+                       (current-column)))))
          (width (max 0 vox-preview-width)))
     (dolist (window (get-buffer-window-list buffer nil t))
       (setq width (min width (max 0 (- (window-body-width window)
@@ -66,10 +69,13 @@ switches windows or sends input to an agent."
          (with-current-buffer buffer
            (when buffer-read-only (error "Vox target is read-only"))
            (save-excursion
-             (goto-char marker)
-             (undo-boundary)
-             (atomic-change-group (insert text))
-             (undo-boundary)))))
+             (save-restriction
+               ;; A restriction can otherwise clamp the captured marker silently.
+               (widen)
+               (goto-char marker)
+               (undo-boundary)
+               (atomic-change-group (insert text))
+               (undo-boundary))))))
      :on-error
      (lambda (_session _error)
        (unless noninteractive
