@@ -1,0 +1,4 @@
+.deps/
+*.elc
+*~
+.DS_Store

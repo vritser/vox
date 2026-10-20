@@ -1,0 +1,361 @@
+;;; vox-core.el --- Session lifecycle and transcript reconciliation -*- lexical-binding: t; -*-
+
+;; SPDX-License-Identifier: GPL-3.0-or-later
+;;; Commentary:
+;; No provider-specific branches or buffer insertion belong in this module.
+;;; Code:
+(require 'vox-backend)
+
+(defcustom vox-audio-chunk-ms 100 "Default PCM frame duration in milliseconds."
+  :type '(choice (const 100) (const 200)) :group 'vox)
+(defcustom vox-audio-backlog-seconds 2 "Maximum queued PCM, in seconds (0.5 to 5)."
+  :type 'number :group 'vox)
+(defcustom vox-connect-timeout 20 "Seconds allowed for backend readiness."
+  :type 'number :group 'vox)
+(defcustom vox-stop-timeout 15 "Seconds allowed to drain and receive completion."
+  :type 'number :group 'vox)
+(defcustom vox-max-session-seconds 300 "Recording duration before graceful stop."
+  :type 'number :group 'vox)
+(defcustom vox-preview-interval 0.1 "Minimum interval between preview notifications."
+  :type 'number :group 'vox)
+(defcustom vox-max-transcript-chars 200000 "Maximum live hypothesis characters."
+  :type 'integer :group 'vox)
+
+(cl-defstruct (vox-session (:constructor vox--make-session))
+  id generation backend methods backend-state state websocket recorder
+  audio-pending audio-timer audio-ended chunk-bytes queue-limit
+  target-buffer target-marker sink segments snapshot snapshot-revision snapshot-final
+  preview-text final-text stop-requested finish-sent committed cleaned
+  stop-timer connect-timer duration-timer preview-timer kill-hook
+  last-error statistics)
+
+(defvar vox--active-session nil)
+(defvar vox--last-session nil)
+(defvar vox--generation 0)
+
+(declare-function vox-audio-start "vox-audio" (session on-bytes on-ended on-error))
+(declare-function vox-audio-stop "vox-audio" (session))
+(declare-function vox-audio-cancel "vox-audio" (session))
+
+(defun vox-current-session () "Return the active session, or nil." vox--active-session)
+
+(defun vox-session-live-p (session generation)
+  "Whether SESSION still owns callbacks captured with GENERATION."
+  (and (eq session vox--active-session)
+       (= generation (vox-session-generation session))
+       (not (memq (vox-session-state session) '(completed cancelled error)))))
+
+(defun vox--live-p (session)
+  "Return non-nil if SESSION is live."
+  (vox-session-live-p session (vox-session-generation session)))
+
+(defun vox--notify (session key &rest args)
+  "Notify SESSION sink KEY with ARGS.  Never print sink exceptions."
+  (when-let* ((fn (plist-get (vox-session-sink session) key)))
+    (apply fn session args)))
+
+(defun vox--method (session key &rest args)
+  "Call SESSION method KEY with ARGS."
+  (when-let* ((fn (plist-get (vox-session-methods session) key)))
+    (apply fn session args)))
+
+(defun vox--state (session state)
+  "Transition SESSION to STATE, enforcing the nonterminal graph."
+  (let ((old (vox-session-state session)))
+    (unless (or (memq state '(error cancelled))
+                (memq state (cdr (assq old '((connecting recording)
+                                            (recording draining)
+                                            (draining finalizing)
+                                            (finalizing completed))))))
+      (error "Invalid Vox state transition"))
+    (setf (vox-session-state session) state)
+    (vox--notify session :on-state state)))
+
+(defun vox--cancel-timer (timer)
+  "Cancel TIMER when it is a timer."
+  (when (timerp timer) (cancel-timer timer)))
+
+(defun vox--cleanup (session)
+  "Release SESSION resources exactly once; terminal state precedes teardown."
+  (unless (vox-session-cleaned session)
+    (setf (vox-session-cleaned session) t)
+    (dolist (timer (list (vox-session-audio-timer session)
+                         (vox-session-preview-timer session)
+                         (vox-session-connect-timer session)
+                         (vox-session-duration-timer session)
+                         (vox-session-stop-timer session)))
+      (vox--cancel-timer timer))
+    (when (fboundp 'vox-audio-cancel)
+      (ignore-errors (vox-audio-cancel session)))
+    (ignore-errors (vox--method session :close))
+    (when (buffer-live-p (vox-session-target-buffer session))
+      (with-current-buffer (vox-session-target-buffer session)
+        (remove-hook 'kill-buffer-hook (vox-session-kill-hook session) t)))
+    (when (markerp (vox-session-target-marker session))
+      (set-marker (vox-session-target-marker session) nil))
+    (setf (vox-session-audio-pending session) (unibyte-string)
+          (vox-session-audio-timer session) nil
+          (vox-session-preview-timer session) nil
+          (vox-session-connect-timer session) nil
+          (vox-session-duration-timer session) nil
+          (vox-session-stop-timer session) nil
+          (vox-session-backend-state session) nil)
+    (when (eq session vox--active-session) (setq vox--active-session nil))
+    (setq vox--last-session session)))
+
+(defun vox-core-fail (session message)
+  "Fail SESSION with sanitized MESSAGE, without committing partial text."
+  (when (vox--live-p session)
+    (setf (vox-session-last-error session) message
+          (vox-session-state session) 'error)
+    (unwind-protect
+        (progn (ignore-errors (vox--notify session :on-state 'error))
+               (ignore-errors (vox--notify session :on-error message)))
+      (ignore-errors (vox--method session :cancel))
+      (vox--cleanup session))))
+
+(defun vox--guard (session generation function)
+  "Wrap FUNCTION in SESSION GENERATION and error guards."
+  (lambda (&rest args)
+    (when (vox-session-live-p session generation)
+      (condition-case nil (apply function args)
+        (error (vox-core-fail session "Vox callback failed; session safely stopped"))))))
+
+(defun vox-core-start (backend sink &optional buffer marker)
+  "Start BACKEND with SINK, capturing BUFFER and MARKER as output ownership.
+A nil SINK is supported for headless callers.  MARKER is copied and follows
+text typed at the original insertion point.  Return the new session."
+  (when vox--active-session (user-error "A Vox session is already active"))
+  (unless (and (numberp vox-audio-backlog-seconds)
+               (<= 0.5 vox-audio-backlog-seconds 5)
+               (> vox-connect-timeout 0) (> vox-stop-timeout 0)
+               (> vox-max-session-seconds 0) (> vox-preview-interval 0))
+    (user-error "Invalid Vox limits"))
+  (let* ((methods (copy-sequence (vox-backend-methods backend)))
+         (chunk-ms (or (plist-get methods :chunk-ms) vox-audio-chunk-ms))
+         (chunk-ms (if (functionp chunk-ms) (funcall chunk-ms) chunk-ms))
+         (generation (cl-incf vox--generation))
+         (target (or buffer (current-buffer)))
+         (session (vox--make-session
+                   :id (format "vox-%s-%d" (format-time-string "%s%N") generation)
+                   :generation generation :backend backend :methods methods
+                   :state 'connecting :sink sink :target-buffer target
+                   :target-marker (with-current-buffer target (copy-marker (or marker (point)) t))
+                   :audio-pending (unibyte-string) :chunk-bytes (* 32 chunk-ms)
+                   :queue-limit (floor (* 32000 vox-audio-backlog-seconds))
+                   :preview-text "" :statistics '(:sent-bytes 0 :queue-peak 0))))
+    (unless (memq chunk-ms '(100 200)) (user-error "Vox frames must be 100 or 200 ms"))
+    (setq vox--active-session session)
+    (setf (vox-session-kill-hook session)
+          (vox--guard session generation (lambda () (vox-core-cancel session))))
+    (with-current-buffer target
+      (add-hook 'kill-buffer-hook (vox-session-kill-hook session) nil t))
+    (setf (vox-session-connect-timer session)
+          (run-at-time vox-connect-timeout nil
+                       (vox--guard session generation
+                                   (lambda () (vox-core-fail session "Backend readiness timed out")))))
+    (condition-case nil
+        (progn
+          (vox--notify session :on-state 'connecting)
+          (when (vox--live-p session)
+            (vox--method
+             session :connect
+             (vox--guard session generation (lambda () (vox--ready session)))
+             (vox--guard session generation (lambda (event) (vox-core-event session event)))
+             (vox--guard session generation (lambda (message) (vox-core-fail session message))))))
+      (error (vox-core-fail session "Backend setup failed; check credentials, endpoint and dependencies")))
+    session))
+
+(defun vox--ready (session)
+  "Start recording only after SESSION backend declares readiness."
+  (when (eq (vox-session-state session) 'connecting)
+    (vox--cancel-timer (vox-session-connect-timer session))
+    (setf (vox-session-connect-timer session) nil)
+    (vox--state session 'recording)
+    (when (and (vox--live-p session) (eq (vox-session-state session) 'recording))
+      (let ((generation (vox-session-generation session)))
+        (setf (vox-session-duration-timer session)
+              (run-at-time vox-max-session-seconds nil
+                           (vox--guard session generation (lambda () (vox-core-stop session)))))
+        (when (plist-get (vox-session-methods session) :needs-external-audio)
+          (setf (vox-session-recorder session)
+                (vox-audio-start
+                 session
+                 (vox--guard session generation (lambda (bytes) (vox-core-audio session bytes)))
+                 (vox--guard session generation (lambda () (vox-core-audio-ended session)))
+                 (vox--guard session generation (lambda (message) (vox-core-fail session message))))))))))
+
+(defun vox-core-stop (&optional session)
+  "Gracefully stop SESSION, or the active session, idempotently."
+  (setq session (or session vox--active-session))
+  (when (and session (vox--live-p session))
+    (pcase (vox-session-state session)
+      ('connecting (vox-core-cancel session))
+      ('recording
+       (condition-case nil
+           (progn
+             (setf (vox-session-stop-requested session) t)
+             (vox--state session 'draining)
+             (when (vox--live-p session)
+               (setf (vox-session-stop-timer session)
+                     (run-at-time vox-stop-timeout nil
+                                  (vox--guard session (vox-session-generation session)
+                                              (lambda () (vox-core-fail session "Stop timed out; final audio may be incomplete")))))
+               (if (plist-get (vox-session-methods session) :needs-external-audio)
+                   (vox-audio-stop session)
+                 (vox-core-audio-ended session))))
+         (error (vox-core-fail session "Could not gracefully stop recording")))))))
+
+(defun vox-core-cancel (&optional session)
+  "Discard SESSION or active recording, without a final commit."
+  (setq session (or session vox--active-session))
+  (when (and session (vox--live-p session))
+    (setf (vox-session-state session) 'cancelled)
+    (unwind-protect
+        (progn (ignore-errors (vox--notify session :on-state 'cancelled))
+               (ignore-errors (vox--method session :cancel)))
+      (vox--cleanup session))))
+
+(defun vox-core-audio (session bytes)
+  "Queue unibyte PCM BYTES for SESSION, then perform bounded send work."
+  (when (and (vox--live-p session)
+             (memq (vox-session-state session) '(recording draining))
+             (not (vox-session-audio-ended session)))
+    (unless (and (stringp bytes) (not (multibyte-string-p bytes)))
+      (error "PCM must be unibyte"))
+    (let ((size (+ (length bytes) (length (vox-session-audio-pending session)))))
+      (if (> size (vox-session-queue-limit session))
+          (vox-core-fail session "PCM backlog limit exceeded; audio was not silently dropped")
+        (setf (vox-session-audio-pending session) (concat (vox-session-audio-pending session) bytes)
+              (vox-session-statistics session)
+              (plist-put (vox-session-statistics session) :queue-peak
+                         (max size (plist-get (vox-session-statistics session) :queue-peak))))
+        (vox--pump session)))))
+
+(defun vox-core-audio-ended (session)
+  "Observe recorder exit for SESSION before sending its final PCM remainder."
+  (when (vox--live-p session)
+    (if (not (eq (vox-session-state session) 'draining))
+        (vox-core-fail session "Recorder exited unexpectedly; check input device and microphone permission")
+      (setf (vox-session-audio-ended session) t)
+      (vox--pump session))))
+
+(defun vox--pump (session)
+  "Send at most eight queued frames, scheduling further SESSION work."
+  (when (vox--live-p session)
+    (condition-case nil
+        (let ((budget 8) (frame (vox-session-chunk-bytes session)))
+          (while (and (> budget 0) (vox--live-p session)
+                      (>= (length (vox-session-audio-pending session)) frame))
+            (let ((bytes (substring (vox-session-audio-pending session) 0 frame)))
+              (setf (vox-session-audio-pending session) (substring (vox-session-audio-pending session) frame))
+              (vox--send-pcm session bytes))
+            (cl-decf budget))
+          (when (vox--live-p session)
+            (if (>= (length (vox-session-audio-pending session)) frame)
+                (unless (vox-session-audio-timer session)
+                  (setf (vox-session-audio-timer session)
+                        (run-at-time 0.01 nil
+                                     (vox--guard session (vox-session-generation session)
+                                                 (lambda ()
+                                                   (setf (vox-session-audio-timer session) nil)
+                                                   (vox--pump session))))))
+              (when (and (vox-session-audio-ended session) (not (vox-session-finish-sent session)))
+                (let ((rest (vox-session-audio-pending session)))
+                  (if (cl-oddp (length rest))
+                      (vox-core-fail session "Recorder ended with a truncated PCM sample")
+                    (when (> (length rest) 0) (vox--send-pcm session rest))
+                    (when (vox--live-p session)
+                      (setf (vox-session-audio-pending session) (unibyte-string)
+                            (vox-session-finish-sent session) t)
+                      (vox--state session 'finalizing)
+                      (when (vox--live-p session) (vox--method session :finish)))))))))
+      (error (vox-core-fail session "Audio transmission failed")))))
+
+(defun vox--send-pcm (session bytes)
+  "Send BYTES, recording accepted bytes (not network delivery) for SESSION."
+  (vox--method session :send-pcm bytes)
+  (setf (vox-session-statistics session)
+        (plist-put (vox-session-statistics session) :sent-bytes
+                   (+ (length bytes) (plist-get (vox-session-statistics session) :sent-bytes)))))
+
+(defun vox-session-text (session &optional confirmed-only)
+  "Build SESSION text in first-seen order; optionally use CONFIRMED-ONLY."
+  (if (stringp (vox-session-snapshot session))
+      (if (or (not confirmed-only) (vox-session-snapshot-final session))
+          (vox-session-snapshot session) "")
+    (mapconcat (lambda (entry)
+                 (if (or (not confirmed-only) (plist-get (cdr entry) :final))
+                     (plist-get (cdr entry) :text) ""))
+               (vox-session-segments session) "")))
+
+(defun vox--preview (session)
+  "Coalesce preview notifications for SESSION."
+  (setf (vox-session-preview-text session) (vox-session-text session))
+  (when (> (length (vox-session-preview-text session)) vox-max-transcript-chars)
+    (error "Transcript limit exceeded"))
+  (unless (vox-session-preview-timer session)
+    (setf (vox-session-preview-timer session)
+          (run-at-time vox-preview-interval nil
+                       (vox--guard session (vox-session-generation session)
+                                   (lambda ()
+                                     (setf (vox-session-preview-timer session) nil)
+                                     (vox--notify session :on-preview (vox-session-preview-text session)
+                                                  (vox-session-state session))))))))
+
+(defun vox-core-event (session event)
+  "Reconcile normalized EVENT for SESSION.  Callbacks cannot insert directly."
+  (when (vox--live-p session)
+    (condition-case nil
+        (pcase (plist-get event :type)
+          ((or :segment-partial :segment-final)
+           (let* ((id (plist-get event :id)) (text (plist-get event :text))
+                  (revision (plist-get event :revision))
+                  (entry (assoc id (vox-session-segments session)))
+                  (old (cdr entry)) (old-rev (plist-get old :revision))
+                  (final (eq (plist-get event :type) :segment-final)))
+             (unless (and (stringp id) (stringp text)
+                          (or (null revision) (numberp revision)))
+               (error "Invalid segment"))
+             (unless (or (and (not final) (plist-get old :final))
+                         (and revision old-rev (<= revision old-rev)
+                              (or (not final) (plist-get old :final))))
+               (let ((value (list :text text :revision (or revision old-rev) :final final)))
+                 (if entry (setcdr entry value)
+                   (setf (vox-session-segments session)
+                         (nconc (vox-session-segments session) (list (cons id value))))))
+               (setf (vox-session-snapshot session) nil)
+               (vox--preview session))))
+          (:snapshot
+           (let ((text (plist-get event :text)) (revision (plist-get event :revision))
+                 (old (vox-session-snapshot-revision session)))
+             (unless (and (stringp text) (or (null revision) (numberp revision)))
+               (error "Invalid snapshot"))
+             (unless (and revision old (<= revision old))
+               (setf (vox-session-snapshot session) text
+                     (vox-session-snapshot-revision session) revision
+                     (vox-session-snapshot-final session) (eq (plist-get event :final-p) t)
+                     (vox-session-segments session) nil)
+               (vox--preview session))))
+          (:completed (vox--complete session))
+          (:error (vox-core-fail session "Provider reported a recognition error"))
+          (_ nil))
+      (error (vox-core-fail session "Invalid recognition event or output sink failure")))))
+
+(defun vox--complete (session)
+  "Commit authoritative SESSION completion once, after audio finalization."
+  (unless (and (eq (vox-session-state session) 'finalizing)
+               (vox-session-finish-sent session))
+    (error "Provider completed before finish"))
+  (setf (vox-session-final-text session) (vox-session-text session))
+  (unless (vox-session-committed session)
+    ;; Set the latch before calling external code to defeat reentrant events.
+    (setf (vox-session-committed session) t)
+    (vox--notify session :on-finish (vox-session-final-text session)))
+  (when (vox--live-p session)
+    (setf (vox-session-state session) 'completed)
+    (unwind-protect (ignore-errors (vox--notify session :on-state 'completed))
+      (vox--cleanup session))))
+
+(provide 'vox-core)
+;;; vox-core.el ends here
