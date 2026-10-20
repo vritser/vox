@@ -4,6 +4,16 @@
 
 ### Added
 
+- **Minibuffer input selection:** `vox-select-input-device` enumerates FFmpeg
+  AVFoundation, DirectShow, or PulseAudio inputs and requires an explicit choice.
+  First interactive start prompts only when input is unset; existing argv,
+  headless startup, and CLI behavior stay explicit. Prefix `C-u` opts into
+  Customize persistence. Discovery has a bounded timeout/output, safe cleanup,
+  and no raw-listing logging; startup preserves its original insertion target
+  and backend across the prompt. Failed or canceled saves restore Customize
+  metadata so later saves cannot persist the rejected selection.
+  Real-device enumeration remains unvalidated.
+
 - **Native streaming speech input:** independent Emacs 28.1+ package with Qwen
   VAD, experimental Doubao, and an optional UTF-8 NDJSON v1 CLI backend. No
   Python, Node, local ASR bridge, or dsh-emacs runtime dependency is required.

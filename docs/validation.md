@@ -135,6 +135,44 @@ Real microphone threshold calibration, cloud finalization latency, and other
 Emacs versions remain unverified. No actual credential store, microphone, or
 cloud recognizer was accessed for this change.
 
+## 2026-10-20 explicit input-device selection
+
+The FFmpeg device picker and interactive first-start flow passed
+`scripts/verify.sh`, including strict compilation, silent loading, tooling checks,
+and source hygiene. A separate full run reported **189 passed, 0 unexpected,
+0 skipped** in 3.416169 seconds on local Emacs 31.1.50.
+
+The 45 added regressions comprise 31 device tests and 14 startup tests. Listings
+are synthetic and process/completion/persistence APIs are mocked. Coverage
+includes older/current AVFoundation, DirectShow and PulseAudio shapes; audio-only
+selection where the format exposes types; alternative IDs, duplicate names,
+Unicode and single-token argv; time/output limits, delayed tail output before
+terminal sentinel, signal/quit cleanup, and no parsing after failed discovery.
+Selection tests cover explicit singleton confirmation, no generic history,
+optional saving and failure rollback, active-session/reentrancy rejection, and
+case-insensitive completion without guessing between case-distinct identities.
+Startup tests preserve explicit settings, exclude CLI/headless prompting, abort
+on cancellation, and retain the original buffer/marker and backend across the
+minibuffer, including target destruction and read-only changes.
+
+A separate native Emacs subprocess smoke check used only synthetic `sh` children:
+merged stdout/stderr and a normal exit code of 7 were accepted; a blocked shell
+builtin hit the configured timeout and left no live discovery child. This did
+not invoke FFmpeg enumeration, open a microphone, contact a recognizer, or save
+user settings. Real hardware lists, OS permission dialogs, Customize file writes,
+and platform-specific live behavior remain unvalidated. FFmpeg listing formats
+are human-readable, not a stable machine protocol.
+
+### Pre-commit persistence follow-up
+
+The 2026-10-20 pre-commit run passed `scripts/verify.sh` and **190 unit tests,
+0 unexpected, 0 skipped** in 3.617265 seconds. The added rollback regression
+uses real Customize metadata handling and later persistence to a temporary file,
+with synthetic values only. It verifies error and quit rollback, both initially
+configured and unset metadata, preservation of unrelated theme changes, and
+that a later save does not persist the rejected device. User configuration files
+and real-device behavior remain untested.
+
 ## Acceptance boundary
 
 Implemented and locally checked: independent `vox-*` package, asynchronous capture/setup, bounded PCM queue, fragment-safe transport, snapshot/segment replacement, preview-only partials, one final undoable insertion, captured-target ownership, stop/cancel distinction, late-event suppression, credential resolver/endpoint validation, CLI protocol, docs and source release target.

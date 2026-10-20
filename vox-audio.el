@@ -17,6 +17,8 @@
 
 (defcustom vox-audio-input nil
   "FFmpeg input argument list; nil requires explicit device selection.
+Use `vox-select-input-device', or choose when starting interactively with
+nil input.  Programmatic/headless starts still require explicit argv.
 For example, macOS can use (\"-f\" \"avfoundation\" \"-i\" \":0\").
 For virtual-source tests use (\"-re\" \"-f\" \"lavfi\" \"-i\"
 \"sine=frequency=440:sample_rate=16000\").  Arguments are passed directly

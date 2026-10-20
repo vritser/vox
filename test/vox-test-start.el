@@ -1,0 +1,178 @@
+;;; vox-test-start.el --- Interactive startup preflight tests -*- lexical-binding: t; no-byte-compile: t; -*-
+
+;; SPDX-License-Identifier: GPL-3.0-or-later
+;;; Commentary:
+;; No device discovery, microphone, subprocess or provider is used here.
+;;; Code:
+(require 'vox-test-support)
+(require 'vox)
+
+(defmacro vox-start-test--stub (&rest body)
+  "Run BODY with fake input selection and a captured core start."
+  (declare (indent 0) (debug t))
+  `(let ((vox--active-session nil) (vox-audio-input nil)
+         (vox-audio-program "synthetic-ffmpeg") (vox-backend 'qwen)
+         (noninteractive nil) (external t) (selected 0) (started 0)
+         (selection '("-f" "avfoundation" "-i" ":2")) start-args)
+     (cl-letf (((symbol-function 'vox-backend-methods)
+                (lambda (_) (list :needs-external-audio external)))
+               ((symbol-function 'executable-find) (lambda (_) "/synthetic/ffmpeg"))
+               ((symbol-function 'vox-select-input-device)
+                (lambda (&optional _) (cl-incf selected)
+                  (setq vox-audio-input (copy-sequence selection))))
+               ((symbol-function 'vox-core-start)
+                (lambda (backend sink &optional buffer marker)
+                  (cl-incf started)
+                  (setq start-args (list backend sink buffer
+                                         (when marker (marker-position marker))
+                                         (current-buffer)))
+                  'started)))
+       (with-temp-buffer ,@body))))
+
+(ert-deftest vox-start-first-interactive-call-selects-input ()
+  :tags '(vox-unit)
+  (vox-start-test--stub
+    (should (eq (call-interactively #'vox-start) 'started))
+    (should (= selected 1))
+    (should (= started 1))
+    (should (equal vox-audio-input selection))))
+
+(ert-deftest vox-start-interactive-toggle-keeps-selection-interactive ()
+  :tags '(vox-unit)
+  (vox-start-test--stub
+    (call-interactively #'vox-toggle)
+    (should (= selected 1))
+    (should (= started 1))))
+
+(ert-deftest vox-start-explicit-configuration-never-prompts ()
+  :tags '(vox-unit)
+  (vox-start-test--stub
+    (setq vox-audio-input '("-re" "-f" "lavfi" "-i" "synthetic-source"))
+    (let ((original vox-audio-input))
+      (call-interactively #'vox-start)
+      (should (eq vox-audio-input original))
+      (should (= selected 0))
+      (should (= started 1)))))
+
+(ert-deftest vox-start-programmatic-and-batch-calls-do-not-prompt ()
+  :tags '(vox-unit)
+  (vox-start-test--stub
+    (should-error (vox-start) :type 'user-error)
+    (should-error (vox-toggle) :type 'user-error)
+    (let ((noninteractive t))
+      (should-error (call-interactively #'vox-start) :type 'user-error))
+    (should (= selected 0))
+    (should (= started 0))))
+
+(ert-deftest vox-start-cli-needs-neither-picker-nor-ffmpeg ()
+  :tags '(vox-unit)
+  (vox-start-test--stub
+    (setq external nil vox-backend 'cli)
+    (cl-letf (((symbol-function 'executable-find)
+               (lambda (_) (ert-fail "Self-recording backend looked for FFmpeg"))))
+      (call-interactively #'vox-start))
+    (should (= selected 0))
+    (should (= started 1))
+    (should (eq (car start-args) 'cli))))
+
+(ert-deftest vox-start-no-picker-for-invalid-existing-input ()
+  :tags '(vox-unit)
+  (dolist (input '("not argv" ("-f" . "pulse") ("-i" 1)))
+    (vox-start-test--stub
+      (setq vox-audio-input input)
+      (should-error (call-interactively #'vox-start) :type 'user-error)
+      (should (eq vox-audio-input input))
+      (should (= selected 0))
+      (should (= started 0)))))
+
+(ert-deftest vox-start-missing-ffmpeg-fails-before-selection ()
+  :tags '(vox-unit)
+  (vox-start-test--stub
+    (cl-letf (((symbol-function 'executable-find) (lambda (_) nil)))
+      (should-error (call-interactively #'vox-start) :type 'user-error))
+    (should (= selected 0))
+    (should (= started 0))))
+
+(ert-deftest vox-start-selection-quit-or-error-never-connects ()
+  :tags '(vox-unit)
+  (dolist (failure '(quit user-error))
+    (vox-start-test--stub
+      (cl-letf (((symbol-function 'vox-select-input-device)
+                 (lambda (&optional _) (signal failure '("Synthetic selection failure")))))
+        (should (eq (condition-case condition
+                        (progn (call-interactively #'vox-start) nil)
+                      ((quit error) (car condition)))
+                    failure)))
+      (should-not vox-audio-input)
+      (should (= started 0)))))
+
+(ert-deftest vox-start-active-session-fails-before-selection ()
+  :tags '(vox-unit)
+  (vox-start-test--stub
+    (setq vox--active-session (vox--make-session :state 'recording))
+    (should-error (call-interactively #'vox-start) :type 'user-error)
+    (should (= selected 0))
+    (should (= started 0))))
+
+(ert-deftest vox-start-picker-cannot-retarget-buffer-or-backend ()
+  :tags '(vox-unit)
+  (vox-start-test--stub
+    (insert "ABCD")
+    (goto-char 3)
+    (let ((target (current-buffer)) (other (generate-new-buffer " *vox-start-other*")))
+      (unwind-protect
+          (cl-letf (((symbol-function 'vox-select-input-device)
+                     (lambda (&optional _)
+                       (setq vox-audio-input selection vox-backend 'doubao)
+                       (goto-char (point-min))
+                       (insert "X")
+                       (set-buffer other))))
+            (call-interactively #'vox-start)
+            (should (eq (nth 0 start-args) 'qwen))
+            (should (eq (nth 2 start-args) target))
+            (should (= (nth 3 start-args) 4))
+            (should (eq (nth 4 start-args) target)))
+        (kill-buffer other)))))
+
+(ert-deftest vox-start-rechecks-target-after-selection ()
+  :tags '(vox-unit)
+  (dolist (change '(kill read-only))
+    (vox-start-test--stub
+      (cl-letf (((symbol-function 'vox-select-input-device)
+                 (lambda (&optional _)
+                   (setq vox-audio-input selection)
+                   (if (eq change 'kill) (kill-buffer (current-buffer))
+                     (setq buffer-read-only t)))))
+        (should-error (call-interactively #'vox-start) :type 'user-error))
+      (should (= started 0)))))
+
+(ert-deftest vox-start-read-only-target-fails-before-selection ()
+  :tags '(vox-unit)
+  (vox-start-test--stub
+    (setq buffer-read-only t)
+    (should-error (call-interactively #'vox-start) :type 'user-error)
+    (should (= selected 0))
+    (should (= started 0))))
+
+(ert-deftest vox-start-reentrant-session-cannot-be-overwritten ()
+  :tags '(vox-unit)
+  (vox-start-test--stub
+    (let ((other (vox--make-session :state 'connecting)))
+      (cl-letf (((symbol-function 'vox-select-input-device)
+                 (lambda (&optional _)
+                   (setq vox-audio-input selection vox--active-session other))))
+        (should-error (call-interactively #'vox-start) :type 'user-error))
+      (should (eq vox--active-session other))
+      (should (= started 0)))))
+
+(ert-deftest vox-start-rejects-selection-without-valid-argv ()
+  :tags '(vox-unit)
+  (dolist (invalid '(nil "invalid" ("-i" 1)))
+    (vox-start-test--stub
+      (cl-letf (((symbol-function 'vox-select-input-device)
+                 (lambda (&optional _) (setq vox-audio-input invalid))))
+        (should-error (call-interactively #'vox-start) :type 'user-error))
+      (should (= started 0)))))
+
+(provide 'vox-test-start)
+;;; vox-test-start.el ends here

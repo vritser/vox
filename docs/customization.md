@@ -10,7 +10,7 @@ group. Cloud recognition is not live-validated; Doubao remains experimental.
 (use-package vox
   :load-path "/path/to/vox"
   :ensure nil
-  :commands (vox-toggle vox-start vox-stop vox-cancel)
+  :commands (vox-toggle vox-start vox-stop vox-cancel vox-select-input-device)
   :custom
   (vox-backend 'qwen)
   (vox-qwen-language "zh")
@@ -26,10 +26,52 @@ its own audio.
 
 ## Choose an audio device
 
-Vox does **not** guess microphone device numbers. Configure `vox-audio-input`
-before starting a cloud session. Arguments are an argv list, never a shell
-command. PCM is signed 16-bit little-endian, 16 kHz mono, without a WAV header.
-`vox-audio-program` defaults to `ffmpeg`.
+Vox enumerates inputs but never silently guesses or selects the first microphone.
+Run `M-x vox-select-input-device`, select a device with minibuffer completion,
+and press Return. Even a single result requires a choice. If `vox-audio-input`
+is nil, the first **interactive** `vox-start` or `vox-toggle` opens this picker
+before connecting to a recognizer. Cancel with `C-g` to abort without starting
+recognition. Existing non-nil input configurations are not replaced automatically.
+
+A normal selection changes `vox-audio-input` for the current Emacs session only.
+Use `C-u M-x vox-select-input-device` to save that option through Customize, using
+your configured `custom-file` or Emacs init file. Saving is explicit; discovery
+and ordinary selection do not edit configuration files. Stop or cancel an active
+Vox session before choosing a different input.
+
+| System | Enumerated inputs | Requirements / limitations |
+| --- | --- | --- |
+| macOS | AVFoundation audio devices, excluding video-only entries | FFmpeg AVFoundation support; numeric indices may change after hardware changes |
+| Windows | DirectShow audio devices | FFmpeg DirectShow support; reported alternative identifiers distinguish duplicate names |
+| GNU/Linux | PulseAudio sources, including PipeWire's PulseAudio compatibility service | FFmpeg PulseAudio support and a reachable server; sources may include system-audio monitors |
+
+Rerun the picker after changing devices. Saving an AVFoundation index does not
+make it a stable physical-device identity. Known PulseAudio monitor sources are
+labelled as system audio; the list is not guaranteed to contain only microphones.
+ALSA-only systems, unsupported platforms, or builds without listing support still
+use explicit `vox-audio-input` configuration as shown below; there is no silent
+fallback to a default input.
+
+Discovery starts a local FFmpeg listing process only on request, not when Vox is
+loaded. It collects stdout/stderr without logging the listing, limits retained
+output to 64 KiB, and defaults to a 5-second timeout. Set
+`vox-device-discovery-timeout` from 0.1 to 30 seconds if needed. Quit, timeout, or
+failure cleans up that listing process. Listing may contact local audio services,
+initialize device drivers, or cause native permission prompts; it is not a
+promise of zero hardware interaction. Grant required permissions and retry if
+needed. No recognizer is contacted until a first-start choice succeeds.
+
+Noninteractive/programmatic `vox-start` and headless `vox-core-start` do not open
+a picker; configure their input explicitly. The self-recording CLI backend has
+its own device handling and does not use this picker automatically. The manual
+input remains an argv list, never a shell command. PCM is signed 16-bit
+little-endian, 16 kHz mono, without a WAV header. `vox-audio-program` defaults to
+`ffmpeg` and is also used for listing.
+
+The parsers cover older and current human-readable FFmpeg listing forms; these
+are not a stable machine protocol. See the official
+[FFmpeg device documentation](https://ffmpeg.org/ffmpeg-devices.html). Tests use
+synthetic listings, not real-device acceptance on each platform.
 
 ### macOS
 
@@ -60,6 +102,20 @@ Use the appropriate input backend compiled into your FFmpeg:
 ;; Or ALSA, after selecting the actual capture device:
 (setq vox-audio-input '("-f" "alsa" "-i" "hw:0,0"))
 ```
+
+### Windows
+
+The picker uses DirectShow enumeration. For manual setup, use a reported audio
+name or alternative identifier as a single argument:
+
+```elisp
+(setq vox-audio-input '("-f" "dshow" "-i" "audio=YOUR_DEVICE_NAME_OR_ID"))
+```
+
+Replace the placeholder with the exact identifier, preferably the reported
+alternative name for duplicate friendly names. Do not add shell quotes around
+its value inside the Lisp string. A friendly name containing a colon needs a
+usable alternative identifier; the picker does not guess how to escape it.
 
 ### Synthetic development source
 

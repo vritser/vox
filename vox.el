@@ -15,6 +15,7 @@
 (require 'vox-core)
 (require 'vox-ui)
 (require 'vox-audio)
+(require 'vox-device)
 (require 'vox-transport)
 (require 'vox-backend-qwen)
 (require 'vox-backend-doubao)
@@ -29,16 +30,35 @@
 SINK is a plist of :on-preview, :on-finish, :on-state, :on-error functions.
 It receives the captured session, never the callback's current buffer.
 For a headless session with no sink use `vox-core-start' directly.
-Vox-owned recordings stop after silence by default; see `vox-stop-mode'."
+Vox-owned recordings stop after silence by default; see `vox-stop-mode'.
+An interactive start prompts for an input device when `vox-audio-input' is
+nil.  Programmatic calls require explicit input configuration and do not prompt."
   (interactive)
+  (when (vox-current-session) (user-error "A Vox session is already active"))
   (when buffer-read-only
     (unless sink (user-error "Vox target buffer is read-only")))
-  (when (plist-get (vox-backend-methods (or backend vox-backend)) :needs-external-audio)
-    (unless (and (consp vox-audio-input) (cl-every #'stringp vox-audio-input))
-      (user-error "Configure vox-audio-input with an explicit device argv list first"))
-    (unless (executable-find vox-audio-program)
-      (user-error "FFmpeg is unavailable; configure vox-audio-program first")))
-  (vox-core-start (or backend vox-backend) (or sink (vox-make-buffer-sink))))
+  (let ((selected-backend (or backend vox-backend))
+        (interactivep (called-interactively-p 'interactive))
+        (target (current-buffer))
+        (marker (copy-marker (point) t)))
+    (unwind-protect
+        (progn
+          (when (plist-get (vox-backend-methods selected-backend) :needs-external-audio)
+            (unless (and (stringp vox-audio-program) (executable-find vox-audio-program))
+              (user-error "FFmpeg is unavailable; configure vox-audio-program first"))
+            (when (and (null vox-audio-input) interactivep)
+              (vox-select-input-device))
+            (unless (and (consp vox-audio-input) (proper-list-p vox-audio-input)
+                         (cl-every #'stringp vox-audio-input))
+              (user-error "Use vox-select-input-device or configure vox-audio-input as an argv list")))
+          ;; Discovery and completion may process callbacks or change the buffer.
+          (when (vox-current-session) (user-error "A Vox session is already active"))
+          (unless (buffer-live-p target) (user-error "Vox target buffer no longer exists"))
+          (with-current-buffer target
+            (when (and buffer-read-only (not sink))
+              (user-error "Vox target buffer is read-only"))
+            (vox-core-start selected-backend (or sink (vox-make-buffer-sink)) target marker)))
+      (set-marker marker nil))))
 
 ;;;###autoload
 (defun vox-stop ()
@@ -58,7 +78,10 @@ While connecting, stop cancels instead.  Repeated stops are harmless."
   "Start voice input or stop early; report connecting/finalizing status."
   (interactive)
   (let ((session (vox-current-session)))
-    (cond ((not session) (vox-start))
+    (cond ((not session)
+           (if (called-interactively-p 'interactive)
+               (call-interactively #'vox-start)
+             (vox-start)))
           ((eq (vox-session-state session) 'recording) (vox-stop))
           (t (message "Vox: %s; use vox-cancel to discard" (vox-session-state session))))))
 

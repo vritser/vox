@@ -24,9 +24,11 @@ packet are verified. A socket close is not successful recognition.
    (global-set-key (kbd "C-c C-v") #'vox-cancel)
    ```
 
-3. [Select an audio device](docs/customization.md#choose-an-audio-device).
-   `vox-audio-input` must be an explicit FFmpeg argv list; Vox does not guess
-   microphone numbers. Grant microphone permission to the responsible app.
+3. Run `M-x vox-select-input-device` and choose your input in the minibuffer, or
+   let the first interactive `C-c v` ask when `vox-audio-input` is unset.
+   Selection lasts for this Emacs session; `C-u M-x vox-select-input-device`
+   saves it through Customize. Existing explicit input settings are preserved.
+   See [device setup and platform support](docs/customization.md#choose-an-audio-device).
 4. [Configure an API key](#api-key-configuration) for Qwen (default) or
    experimental Doubao, and check the [provider region](docs/customization.md#credentials-and-regions).
    Starting a cloud session sends
@@ -128,6 +130,7 @@ bindings enabled when Vox loads.
 
 | Key / command | Action |
 | --- | --- |
+| `M-x vox-select-input-device` | Choose an input; prefix `C-u` saves through Customize |
 | `C-c v` / `M-x vox-toggle` | Start when idle, stop when recording; otherwise report status |
 | `C-c C-v` / `M-x vox-cancel` | Discard the session without inserting text |
 | `M-x vox-start` / `M-x vox-stop` | Explicit start / graceful stop; stop while connecting cancels |
