@@ -20,12 +20,32 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        emacs-version: ['28.1', '29.4', '30.2']
+        include:
+          - emacs-version: '28.1'
+            nixpkgs: nixos-22.05
+            nix-attr: emacs-nox
+          - emacs-version: '29.4'
+            nixpkgs: nixos-24.05
+            nix-attr: emacs29-nox
+          - emacs-version: '30.2'
+            nixpkgs: nixos-25.05
+            nix-attr: emacs30-nox
     steps:
       - uses: actions/checkout@v4
-      - uses: purcell/setup-emacs@master
-        with:
-          version: ${{ matrix.emacs-version }}
+      - uses: cachix/install-nix-action@v31
+      - name: Install Emacs ${{ matrix.emacs-version }}
+        run: |
+          nix profile install --accept-flake-config \
+            "github:NixOS/nixpkgs/${{ matrix.nixpkgs }}#${{ matrix.nix-attr }}"
+          echo "$HOME/.nix-profile/bin" >> "$GITHUB_PATH"
+      - name: Verify Emacs features
+        run: |
+          emacs --version | head -n 1
+          emacs -Q --batch --eval '(progn
+            (unless (and (fboundp (quote zlib-available-p)) (zlib-available-p))
+              (error "Emacs lacks native zlib"))
+            (unless (gnutls-available-p)
+              (error "Emacs lacks GnuTLS")))'
       - name: Install virtual-audio dependency
         run: sudo apt-get update && sudo apt-get install -y ffmpeg
       - name: Prepare audited WebSocket dependency

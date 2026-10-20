@@ -109,6 +109,10 @@
   use standard Conventional Commit types. Commits require an explicit request;
   authorized history rewording preserves trees and a backup, without implying
   permission to push.
+- **CI Emacs builds:** CI installs pinned nixpkgs Emacs builds with native zlib
+  and GnuTLS instead of the minimal nix-emacs-ci binaries, which omitted zlib.
+  The test runner also normalizes Emacs 28's direct-debugger assertion for an
+  unknown test name.
 
 ### Fixed
 
