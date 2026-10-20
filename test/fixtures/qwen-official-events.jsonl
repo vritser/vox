@@ -1,0 +1,3 @@
+{"event_id":"event_R7Pfu8QVBfP5HmpcbEFSd","type":"conversation.item.input_audio_transcription.text","item_id":"item_MpJQPNQzqVRc9aC9zMwSj","content_index":0,"language":"zh","emotion":"neutral","text":"","stash":"\u5317\u4eac\u7684"}
+{"event_id":"event_B3GGEjPT2sLzjBM74W6kB","type":"conversation.item.input_audio_transcription.completed","item_id":"item_B3GGC53jGOuIFcjZkmEQ9","content_index":0,"language":"zh","emotion":"neutral","transcript":"\u4eca\u5929\u5929\u6c14\u600e\u4e48\u6837"}
+{"event_id":"event_2239","type":"session.finished"}

@@ -1,0 +1,123 @@
+;;; vox-qwen-test.el --- Qwen protocol tests -*- lexical-binding: t; -*-
+(require 'ert)
+(require 'cl-lib)
+(require 'vox-backend-qwen)
+
+(ert-deftest vox-qwen-config-is-vad-pcm ()
+  (let* ((vox-qwen-language "zh") (vox-qwen-silence-ms 400)
+         (object (vox-json-read (vox-json-encode (vox-qwen-session-update "e1"))))
+         (session (plist-get object :session)))
+    (should (equal (plist-get session :input_audio_format) "pcm"))
+    (should (= (plist-get session :sample_rate) 16000))
+    (should (equal (plist-get (plist-get session :turn_detection) :type) "server_vad"))
+    (should (= (plist-get (plist-get session :turn_detection) :silence_duration_ms) 400))
+    (should (equal (plist-get object :event_id) "e1")))
+  (let ((vox-qwen-language nil))
+    (should-not (plist-member (plist-get (vox-qwen-session-update "e") :session)
+                              :input_audio_transcription)))
+  (let ((vox-qwen-silence-ms 199)) (should-error (vox-qwen-session-update "e"))))
+
+(ert-deftest vox-qwen-pure-normalization-and-replacement ()
+  (let* ((partial (vox-qwen-normalize
+                   '(:type "conversation.item.input_audio_transcription.text"
+                     :item_id "a" :text "\u4eca\u5929" :stash "\u5929\u6c14")))
+         (final (vox-qwen-normalize
+                 '(:type "conversation.item.input_audio_transcription.completed"
+                   :item_id "a" :transcript "\u4eca\u5929\u5929\u6c14\u597d"))))
+    (should (equal (plist-get partial :text) "\u4eca\u5929\u5929\u6c14"))
+    (should (eq (plist-get partial :type) :segment-partial))
+    (should (eq (plist-get final :type) :segment-final))
+    (should (equal (plist-get final :text) "\u4eca\u5929\u5929\u6c14\u597d")))
+  (should-not (vox-qwen-normalize '(:type "unrecognized.future.event")))
+  (should-error (vox-qwen-normalize
+                 '(:type "conversation.item.input_audio_transcription.text" :text "bad" :stash "")))
+  (dolist (type '("error" "conversation.item.input_audio_transcription.failed"))
+    (let ((result (vox-qwen-normalize (list :type type :error '(:message "secret-audio")))))
+      (should (eq (plist-get result :type) :error))
+      (should-not (string-match-p "secret-audio" (prin1-to-string result))))))
+
+(ert-deftest vox-qwen-connect-ready-audio-finish-order ()
+  (let ((session (vox--make-session :id "test" :generation 1))
+        callbacks headers sent events errors (ready 0) (closed 0))
+    (cl-letf (((symbol-function 'vox-secret) (lambda (&rest _) "test-secret"))
+              ((symbol-function 'vox-transport-open)
+               (lambda (_session _url h open message error close)
+                 (setq headers h callbacks (list open message error close))))
+              ((symbol-function 'vox-transport-send-text)
+               (lambda (_session text) (push (vox-json-read text) sent)))
+              ((symbol-function 'vox-transport-close) (lambda (_) (cl-incf closed))))
+      (vox-qwen-connect session (lambda () (cl-incf ready))
+                        (lambda (e) (push e events)) (lambda (e) (push e errors)))
+      (should (equal (cdr (assoc "Authorization" headers)) "Bearer test-secret"))
+      (should-error (vox-qwen-send-pcm session (unibyte-string 0 0)))
+      (funcall (nth 0 callbacks))
+      (should (= ready 0))
+      (funcall (nth 1 callbacks) "{\"type\":\"session.updated\"}" 'text)
+      (funcall (nth 1 callbacks) "{\"type\":\"session.updated\"}" 'text)
+      (should (= ready 1))
+      (vox-qwen-send-pcm session (unibyte-string 0 255 128 1))
+      (should (equal (base64-decode-string (plist-get (car sent) :audio))
+                     (unibyte-string 0 255 128 1)))
+      (vox-qwen-finish session)
+      (vox-qwen-finish session)
+      (should (equal (mapcar (lambda (x) (plist-get x :type)) (reverse sent))
+                     '("session.update" "input_audio_buffer.append" "session.finish")))
+      (should (= (length (delete-dups (mapcar (lambda (x) (plist-get x :event_id)) sent))) 3))
+      (should-error (vox-qwen-send-pcm session (unibyte-string 0 0)))
+      (funcall (nth 1 callbacks) "{\"type\":\"session.finished\"}" 'text)
+      (funcall (nth 1 callbacks) "{\"type\":\"session.finished\"}" 'text)
+      (funcall (nth 3 callbacks))
+      (should (= (length events) 1))
+      (should-not errors)
+      (vox-qwen-close session) (vox-qwen-close session)
+      (should (= closed 1)))))
+
+(ert-deftest vox-qwen-late-partial-ignored ()
+  (let* ((events nil)
+         (session (vox--make-session
+                   :backend-state
+                   (list :final-items (make-hash-table :test #'equal)
+                         :on-event (lambda (e) (push e events))))))
+    (dolist (e '((:type "conversation.item.input_audio_transcription.text"
+                 :item_id "a" :text "a" :stash "b")
+                (:type "conversation.item.input_audio_transcription.completed"
+                 :item_id "a" :transcript "A")
+                (:type "conversation.item.input_audio_transcription.text"
+                 :item_id "a" :text "late" :stash "")
+                (:type "conversation.item.input_audio_transcription.text"
+                 :item_id "b" :text "B" :stash "")))
+      (vox-qwen--message session (vox-json-encode e) 'text))
+    (should (equal (mapcar (lambda (e) (plist-get e :text)) (reverse events))
+                   '("ab" "A" "B")))))
+
+(ert-deftest vox-qwen-close-without-authoritative-completion-is-error ()
+  (let ((session (vox--make-session :id "s" :generation 2)) close errors)
+    (cl-letf (((symbol-function 'vox-secret) (lambda (&rest _) "test"))
+              ((symbol-function 'vox-transport-open)
+               (lambda (_s _u _h _o _m _e c) (setq close c))))
+      (vox-qwen-connect session #'ignore #'ignore (lambda (e) (push e errors)))
+      (funcall close)
+      (should (equal errors '("Qwen connection closed before session.finished"))))))
+
+(ert-deftest vox-qwen-reject-malformed-and-premature-finish ()
+  (let ((s (vox--make-session :backend-state '(:finished nil))))
+    (should-error (vox-qwen--message s "{}" 'binary))
+    (should-error (vox-qwen--message s "not json" 'text))
+    (should-error (vox-qwen--message s "{\"type\":\"session.finished\"}" 'text))))
+
+(defconst vox-qwen-test--fixtures
+  (expand-file-name "fixtures" (file-name-directory (or load-file-name buffer-file-name))))
+
+(ert-deftest vox-qwen-official-static-examples ()
+  (let ((events (with-temp-buffer
+                  (insert-file-contents (expand-file-name "qwen-official-events.jsonl"
+                                                          vox-qwen-test--fixtures))
+                  (mapcar (lambda (line) (vox-qwen-normalize (vox-json-read line)))
+                          (split-string (buffer-string) "\n" t)))))
+    (should (equal (mapcar (lambda (event) (plist-get event :type)) events)
+                   '(:segment-partial :segment-final :completed)))
+    (should (equal (plist-get (car events) :text) "\u5317\u4eac\u7684"))
+    (should (equal (plist-get (cadr events) :text) "\u4eca\u5929\u5929\u6c14\u600e\u4e48\u6837"))))
+
+(provide 'vox-qwen-test)
+;;; vox-qwen-test.el ends here
