@@ -22,8 +22,16 @@
 An empty selection is an error, not a passing test run.  This function does
 not exit Emacs and is suitable for interactive or coverage-tool use."
   (setq selector (or selector '(tag vox-unit)))
-  (unless (ert-select-tests selector t)
-    (error "No Vox tests match %S" selector))
+  ;; Emacs 28 asserts on an unknown test name instead of signaling
+  ;; `ert-test-unbound'; its assertion calls the debugger directly while
+  ;; ERT has `debug-on-error' bound, bypassing `condition-case'.
+  (let ((tests (let ((debug-on-error nil))
+                 (condition-case nil
+                     (ert-select-tests selector t)
+                   (cl-assertion-failed nil)
+                   (ert-test-unbound nil)))))
+    (unless tests
+      (error "No Vox tests match %S" selector)))
   (cl-progv (when (boundp 'comp-enable-subr-trampolines)
               '(comp-enable-subr-trampolines))
       '(nil)

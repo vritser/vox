@@ -16,6 +16,16 @@
                          (vox-test-batch '(member vox-deliberately-missing-test))
                        (kill-buffer standard-output))))))))
 
+(ert-deftest vox-runner-normalizes-legacy-selector-assertion ()
+  :tags '(vox-runner)
+  ;; Emacs 28's `ert-select-tests' asserts on an unknown test name.  While
+  ;; ERT binds `debug-on-error', `cl-assert' calls the debugger directly and
+  ;; would abort the test unless the runner binds it to nil.
+  (cl-letf (((symbol-function 'ert-select-tests)
+             (lambda (&rest _) (cl-assert nil))))
+    (should-error (vox-test-run '(member vox-deliberately-missing-test))
+                  :type 'error)))
+
 (ert-deftest vox-runner-propagates-test-status ()
   :tags '(vox-runner)
   (dolist (unexpected '(0 1))
