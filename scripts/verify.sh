@@ -52,10 +52,12 @@ run 'runner self-tests' runner \
 run 'strict compilation (temporary output)' compile \
     "$EMACS" -Q --batch -l scripts/compile.el
 
+# Keep the default load suffixes; forcing ".el" here also applies to Emacs's
+# own libraries (see scripts/compile.el).  Strict compilation refuses stale
+# Vox bytecode before any of these steps can load it.
 run 'required dependencies (websocket, FFmpeg, sh, GnuTLS, zlib)' dependencies \
     "$EMACS" -Q --batch -L .deps --eval '
 (progn
-  (setq load-suffixes (list ".el"))
   (unless (require (quote websocket) nil t)
     (error "Missing websocket.el: run scripts/setup-deps.sh"))
   (unless (executable-find "ffmpeg")
@@ -70,8 +72,7 @@ run 'required dependencies (websocket, FFmpeg, sh, GnuTLS, zlib)' dependencies \
 run 'complete unit suite' suite \
     "$EMACS" -Q --batch -l test/vox-test.el
 
-if "$EMACS" -Q --batch -L . -L .deps \
-    --eval '(setq load-suffixes (list ".el"))' -l vox.el \
+if "$EMACS" -Q --batch -L . -L .deps -l vox.el \
     >"$tmpdir/load.log" 2>&1; then
     if [ -s "$tmpdir/load.log" ]; then
         printf 'FAIL clean load (must produce zero output)\n'

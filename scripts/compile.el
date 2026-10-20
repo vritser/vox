@@ -25,8 +25,7 @@
          (load-path (append (list vox-compile-root
                                   (expand-file-name ".deps" vox-compile-root))
                             load-path))
-         ;; This also forces nested `require' calls to ignore stale .elc files.
-         (load-suffixes '(".el"))
+         (stale (directory-files vox-compile-root t "\\`vox.*\\.elc\\'"))
          (byte-compile-warnings t)
          (byte-compile-error-on-warn t)
          (byte-compile-dest-file-function
@@ -36,6 +35,14 @@
     (unwind-protect
         (progn
           (unless files (error "No production vox*.el sources found"))
+          ;; Keep the default suffixes while loading.  Forcing `.el' also
+          ;; applies to Emacs's own libraries; on Emacs 30 and older that
+          ;; makes the `jka-compr' autoload load a compressed copy of itself
+          ;; and recurse.  Vox files load explicitly below, so stale
+          ;; bytecode is refused instead of excluded from the suffix search.
+          (when stale
+            (error "Stale bytecode beside source: %s"
+                   (mapconcat #'file-name-nondirectory stale ", ")))
           (dolist (file files)
             (load file nil t t))
           (dolist (file files)

@@ -147,8 +147,7 @@ Keep each callback's byte charge until its entire input has been consumed."
     (setf (vox-session-backend-state session)
           (list :on-ready on-ready :on-event on-event :on-error on-error
                 :pending (unibyte-string)))
-    (setq stderr (make-pipe-process :name "vox-cli-stderr" :buffer nil
-                                    :noquery t :filter (lambda (&rest _) nil)))
+    (setq stderr (vox--private-pipe-process "vox-cli-stderr" #'ignore))
     (condition-case nil
         (setq proc
               (make-process

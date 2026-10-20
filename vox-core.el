@@ -113,6 +113,20 @@ and key functions may reentrantly cancel the session."
   "Cancel TIMER when it is a timer."
   (when (timerp timer) (cancel-timer timer)))
 
+(defun vox--private-pipe-process (name filter)
+  "Create pipe process NAME with FILTER and no buffer for its output.
+Stderr pipes are read only by a discarding filter.  Emacs 30 and older use
+the process name as the buffer when `:buffer' is nil, so attach a dedicated
+buffer, detach it, and reclaim it."
+  (let ((buffer (generate-new-buffer " *vox-private-pipe*")))
+    (unwind-protect
+        (let ((process (make-pipe-process
+                        :name name :buffer buffer :coding 'binary
+                        :noquery t :filter filter :sentinel #'ignore)))
+          (set-process-buffer process nil)
+          process)
+      (kill-buffer buffer))))
+
 (defun vox--cleanup (session)
   "Release SESSION resources exactly once; terminal state precedes teardown."
   (unless (vox-session-cleaned session)

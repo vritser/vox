@@ -422,4 +422,18 @@
                 'duration))
     (should (= finishes 1))))
 
+(ert-deftest vox-core-private-pipe-keeps-no-output-buffer ()
+  :tags '(vox-unit)
+  (let ((process (vox--private-pipe-process "vox-test-private-pipe" #'ignore)))
+    (unwind-protect
+        (progn
+          (should (processp process))
+          (should-not (process-buffer process))
+          (should-not
+           (cl-some (lambda (buffer)
+                      (string-prefix-p " *vox-private-pipe*"
+                                       (buffer-name buffer)))
+                    (buffer-list))))
+      (delete-process process))))
+
 (provide 'vox-test-core)

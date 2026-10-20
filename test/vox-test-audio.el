@@ -20,10 +20,17 @@
                             stderr (plist-get args :stderr))
                       (should (eq (plist-get args :coding) 'binary))
                       (should (eq (plist-get args :connection-type) 'pipe))
-                      (make-pipe-process :name "vox-test-recorder" :buffer nil
-                                         :coding 'binary :noquery t
-                                         :filter (plist-get args :filter)
-                                         :sentinel (plist-get args :sentinel)))))
+                      (let ((process
+                             (make-pipe-process
+                              :name "vox-test-recorder" :buffer nil
+                              :coding 'binary :noquery t
+                              :filter (plist-get args :filter)
+                              :sentinel (plist-get args :sentinel))))
+                        ;; Emacs 30 and older use the process name as the
+                        ;; buffer for a nil :buffer; a real `make-process'
+                        ;; recorder has no buffer.
+                        (set-process-buffer process nil)
+                        process))))
            (setq recorder (vox-audio-start session
                                           (lambda (bytes) (push bytes received))
                                           (lambda () (push 'ended ended))

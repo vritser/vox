@@ -93,13 +93,11 @@ All callbacks are generation guarded and errors are contained."
       (condition-case nil
           (progn
             (setq stderr
-                  (make-pipe-process
-                   :name "vox-audio-stderr" :buffer nil :coding 'binary
-                   :noquery t
-                   :filter (lambda (process bytes)
-                             (vox-audio--discard-stderr
-                              session generation process bytes))
-                   :sentinel #'ignore))
+                  (vox--private-pipe-process
+                   "vox-audio-stderr"
+                   (lambda (process bytes)
+                     (vox-audio--discard-stderr
+                      session generation process bytes))))
             (setq recorder
                   (make-process
                    :name "vox-audio" :buffer nil :stderr stderr

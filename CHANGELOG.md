@@ -112,6 +112,12 @@
 
 ### Fixed
 
+- **Cross-version verification and stderr isolation:** the strict compile gate
+  no longer forces `.el` suffixes for Emacs's own libraries, which recursively
+  loaded `jka-compr` on compressed installations. Stderr pipes now detach their
+  buffer explicitly, because Emacs 30 and older use the process name when
+  `:buffer` is nil.
+
 - **Lifecycle cleanup edges:** a failing Doubao final snapshot callback can no
   longer restore cleared adapter state; CLI startup reclaims its process and
   stderr pipe if a startup callback cleans the session; a callable `:chunk-ms`
