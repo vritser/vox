@@ -1,4 +1,6 @@
 .deps/
+.playwright-mcp/
+dist/
 *.elc
 *~
 .DS_Store

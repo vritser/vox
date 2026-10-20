@@ -48,11 +48,15 @@ switches windows or sends input to an agent."
                                           width nil nil (when (>= width 3) "...")) "]")
                            'face 'shadow))))))
      :on-state
-     (lambda (_session state)
+     (lambda (session state)
        (when (memq state '(completed cancelled error))
          (when (overlayp overlay) (delete-overlay overlay))
          (setq overlay nil))
-       (unless noninteractive (message "Vox: %s" state)))
+       (unless noninteractive
+         (if (and (memq state '(finalizing completed))
+                  (plist-get (vox-session-statistics session) :audio-tail-risk))
+             (message "Vox: %s; recorder needed a second interrupt, tail audio may be truncated" state)
+           (message "Vox: %s" state))))
      :on-finish
      (lambda (session text)
        (let ((buffer (vox-session-target-buffer session))
