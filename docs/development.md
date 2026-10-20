@@ -37,6 +37,9 @@ emacs -Q --batch -l scripts/compile.el
 # Accelerated synthetic PCM benchmark, not a wall-clock UI test.
 emacs -Q --batch -l scripts/benchmark.el
 
+# Optional per-definition coverage report; diagnostic, outside the gate.
+emacs -Q --batch -l scripts/check-coverage.el
+
 # Clean load: no output, recording, or connection should occur.
 emacs -Q --batch -L . -l vox.el
 ```
@@ -63,6 +66,11 @@ outcomes; do not hide missing assertions behind conditional branches. Unit tests
 use offline provider fakes and synthetic processes, not live cloud acceptance.
 Tool self-tests exercise the development tools separately from runtime behavior.
 
+`scripts/check-coverage.el` is an optional diagnostic, not a gate. It instruments
+the production modules with testcover and lists definitions below 80% coverage.
+`vox.el` is excluded because Edebug changes `called-interactively-p` inside the
+interactive commands its tests exercise.
+
 ## Benchmark and acceptance
 
 The accelerated benchmark models 600 seconds of synthetic PCM. It checks exact
@@ -70,11 +78,9 @@ frame/byte counts, one commit of final text, and cleaned resources. It is **not*
 a real-time latency, microphone, network, CPU-utilization, or UI-responsiveness
 measurement. Keep measured results separate from expectations.
 
-The [validation ledger](validation.md) records an earlier local run of **82 ERT
-tests**. That is a historical measurement, not this restructuring's test count.
-Record the current run's environment, count, skips, and actual results separately;
-do not reuse old figures as proof of a new run. Historical `make` commands in the
-ledger describe that earlier workflow.
+An earlier local run's test count is historical, not the current count. Record
+each run's environment, count, skips, and actual results with the change; do not
+reuse old figures as proof of a new run.
 
 Before claiming production acceptance, manually verify both providers with
 region-correct credentials and microphone consent:
@@ -140,5 +146,21 @@ Keep the [README](../README.md) focused on getting started, keys, and navigation
 Put setup and integration details in [Customization](customization.md), workflow
 in this guide, and ownership in [Architecture](architecture.md). Add user-visible
 changes to [CHANGELOG.md](../CHANGELOG.md) under `0.1.0 - Unreleased` until the
-release is cut. Audit records and the validation ledger retain their historical
-claims; a documentation refactor does not establish new provider acceptance.
+release is cut. Audit records retain their historical claims; a documentation
+refactor does not establish new provider acceptance.
+
+### Postmortems as decision records
+
+Read relevant [postmortems](../postmortems/README.md) before significant changes,
+then verify the code still matches the assumptions. For workflow, architecture,
+public-surface removal, or deliberately deferred behavior decisions, start from
+[the template](../postmortems/000-template.md) and follow the
+[contributor rules](../AGENTS.md#postmortems-decision-records). Routine bug fixes
+still need regression tests, but do not automatically need a decision record.
+
+Keep records short, numbered and evidence-backed. Add a rationale link from the
+corresponding changelog entry and an entry in the postmortem index. Cite real
+commits, or explicitly identify uncommitted work and its base; do not recast a
+potential failure as an observed incident. Superseding decisions get a new record
+and a linked note on the old one. The guides explain current behavior and records
+explain historical choices.

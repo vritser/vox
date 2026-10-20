@@ -7,15 +7,7 @@
 (require 'vox-backend)
 (require 'vox-transport)
 (require 'vox-core)
-(require 'url-util)
 
-(defcustom vox-qwen-model "qwen3-asr-flash-realtime"
-  "Qwen realtime ASR model used by the default endpoint."
-  :type 'string :group 'vox)
-(defcustom vox-qwen-endpoint nil
-  "Complete Qwen WSS URL, or nil for the Beijing public endpoint.
-A custom host requires confirmation before sending credentials or audio."
-  :type '(choice (const :tag "Beijing default" nil) string) :group 'vox)
 (defcustom vox-qwen-language "zh"
   "Qwen source language, or nil for automatic detection."
   :type '(choice (const :tag "Automatic" nil) string) :group 'vox)
@@ -106,28 +98,35 @@ Provider errors intentionally omit untrusted messages and parameter echoes."
 
 (defun vox-qwen-connect (session on-ready on-event on-error)
   "Connect SESSION with ON-READY, ON-EVENT, and ON-ERROR callbacks."
-  (let* ((url (or vox-qwen-endpoint
-                  (concat "wss://dashscope.aliyuncs.com/api-ws/v1/realtime?model="
-                          (url-hexify-string vox-qwen-model))))
+  (let* ((generation (vox-session-generation session))
+         (methods (if (plist-get (vox-session-methods session) :configuration)
+                      (vox-session-methods session)
+                    (vox-backend-methods 'qwen)))
+         (configuration (plist-get methods :configuration))
+         (model (plist-get methods :model))
+         (url (vox-backend-url configuration model))
+         ;; Endpoint approval and key functions may reentrantly cancel SESSION.
+         (_ (vox--require-live session generation))
          (_ (vox-check-endpoint url '("dashscope.aliyuncs.com"
                                       "dashscope-intl.aliyuncs.com")))
+         (_ (vox--require-live session generation))
          (host (url-host (url-generic-parse-url url)))
-         (secret (vox-secret host "VOX_QWEN_API_KEY")))
+         (secret (vox-backend-secret configuration host)))
+    (vox--require-live session generation)
     (setf (vox-session-backend-state session)
           (list :on-ready on-ready :on-event on-event :on-error on-error
                 :final-items (make-hash-table :test #'equal)))
-    (vox-transport-open
-     session url (list (cons "Authorization" (concat "Bearer " secret)))
-     (lambda ()
-       (vox-transport-send-text
-        session (vox-json-encode
-                 (vox-qwen-session-update (vox-qwen--event-id session)))))
-     (lambda (payload opcode) (vox-qwen--message session payload opcode))
-     on-error
-     (lambda ()
-       (let ((state (vox-session-backend-state session)))
-         (unless (or (plist-get state :closed) (plist-get state :completed))
-           (funcall on-error "Qwen connection closed before session.finished")))))))
+    (let ((request (vox-json-encode
+                    (vox-qwen-session-update (vox-qwen--event-id session)))))
+      (vox-transport-open
+       session url (list (cons "Authorization" (concat "Bearer " secret)))
+       (lambda () (vox-transport-send-text session request))
+       (lambda (payload opcode) (vox-qwen--message session payload opcode))
+       on-error
+       (lambda ()
+         (let ((state (vox-session-backend-state session)))
+           (unless (or (plist-get state :closed) (plist-get state :completed))
+             (funcall on-error "Qwen connection closed before session.finished"))))))))
 
 (defun vox-qwen-send-pcm (session bytes)
   "Send unibyte PCM BYTES for ready SESSION."

@@ -55,7 +55,7 @@ trap 'exit 143' TERM
 name=vox-$version
 stage=$created/$name
 mkdir "$stage"
-for required in vox.el vox-pkg.el README.md LICENSE CHANGELOG.md AGENTS.md docs scripts test; do
+for required in vox.el vox-pkg.el README.md LICENSE CHANGELOG.md AGENTS.md docs postmortems scripts test; do
     if [ ! -e "$required" ] || [ -L "$required" ]; then
         printf 'package: missing input or unexpected symlink: %s\n' "$required" >&2
         exit 1
@@ -70,7 +70,7 @@ tar --exclude='.deps' --exclude='dist' --exclude='.git' \
     --exclude='*.orig' --exclude='*.rej' --exclude='.#*' --exclude='#*#' \
     --exclude='.DS_Store' --exclude='._*' --exclude='*.swp' --exclude='*.swo' \
     -cf "$created/inputs.tar" \
-    vox*.el README.md LICENSE CHANGELOG.md AGENTS.md docs scripts test
+    vox*.el README.md LICENSE CHANGELOG.md AGENTS.md docs postmortems scripts test
 tar -xf "$created/inputs.tar" -C "$stage"
 tar -cf "$created/$name.tar" -C "$created" "$name"
 

@@ -121,12 +121,22 @@
     (should (eq (plist-get request :enable_nonstream) :false)))
   (should (plist-get (vox-backend-methods 'doubao) :experimental)))
 
+(ert-deftest vox-doubao-config-selected-model-is-explicit ()
+  :tags '(vox-unit)
+  (let ((vox-model 'unrelated))
+    (should (equal (plist-get (plist-get (vox-doubao-config) :request) :model_name)
+                   "bigmodel"))
+    (should (equal (plist-get (plist-get (vox-doubao-config "selected") :request)
+                              :model_name)
+                   "selected"))))
+
 (ert-deftest vox-doubao-credentials-use-only-namespaced-environment ()
   :tags '(vox-unit)
   (dolist (mode '(environment legacy-only auth-source))
-    (let ((session (vox--make-session :id "credentials" :generation 1))
-          (vox-doubao-endpoint "wss://openspeech.bytedance.com/api/v3/sauc/bigmodel_async")
-          headers queried)
+    (let* ((session (vox--make-session :id "credentials" :generation 1))
+           (vox--active-session session)
+           (vox-model nil)
+           headers queried)
       (cl-letf (((symbol-function 'zlib-available-p) (lambda () t))
                 ((symbol-function 'auth-source-search)
                  (lambda (&rest args)
@@ -156,9 +166,10 @@
 
 (ert-deftest vox-doubao-connect-ready-held-last-frame-and-complete ()
   :tags '(vox-unit)
-  (let ((session (vox--make-session :id "test" :generation 1))
-        callbacks headers sent events errors (ready 0) (closed 0))
-    (cl-letf (((symbol-function 'vox-secret) (lambda (&rest _) "test-secret"))
+  (let* ((session (vox--make-session :id "test" :generation 1))
+         (vox--active-session session)
+         callbacks headers sent events errors (ready 0) (closed 0))
+    (cl-letf (((symbol-function 'vox-backend-secret) (lambda (&rest _) "test-secret"))
               ((symbol-function 'vox-transport-open)
                (lambda (_session _url h open message error close)
                  (setq headers h callbacks (list open message error close))))
@@ -198,8 +209,9 @@
 
 (ert-deftest vox-doubao-premature-end-and-disconnect-are-errors ()
   :tags '(vox-unit)
-  (let ((session (vox--make-session :id "test" :generation 1)) callbacks errors events)
-    (cl-letf (((symbol-function 'vox-secret) (lambda (&rest _) "test"))
+  (let* ((session (vox--make-session :id "test" :generation 1))
+         (vox--active-session session) callbacks errors events)
+    (cl-letf (((symbol-function 'vox-backend-secret) (lambda (&rest _) "test"))
               ((symbol-function 'vox-transport-open)
                (lambda (_s _u _h _o message _error close)
                  (setq callbacks (list message close)))))
@@ -209,6 +221,128 @@
     (funcall (cadr callbacks))
     (should (= (length errors) 2))
     (should-not events)))
+
+(ert-deftest vox-doubao-independent-configurations-and-captured-open-options ()
+  :tags '(vox-unit)
+  ;; Synthetic credentials and delayed fake transports; no provider access.
+  (let* ((vox-model nil) (vox-doubao-second-pass t) (key-calls 0)
+         (first (vox-make-doubao
+                 "first" :models '(base selected) :resource-id "resource.first"
+                 :endpoint "/custom?feature=one"
+                 :key (lambda () (cl-incf key-calls) "synthetic-first")))
+         (second (vox-make-doubao
+                  "second" :models '(other) :resource-id "resource.second"
+                  :endpoint "/other?feature=two"
+                  :key (lambda () (cl-incf key-calls) "synthetic-second")))
+         (a (vox--make-session :id "a" :generation 1
+                               :methods (vox-backend-methods first 'selected)))
+         (b (vox--make-session :id "b" :generation 2
+                               :methods (vox-backend-methods second 'other)))
+         (vox--active-session a)
+         connections sent)
+    (should (= key-calls 0))
+    (setf (vox-backend-resource-id first) "changed"
+          (vox-backend-host first) "changed.invalid"
+          (vox-backend-models first) '("changed"))
+    (cl-letf (((symbol-function 'auth-source-search)
+               (lambda (&rest _) (ert-fail "Explicit key must take precedence")))
+              ((symbol-function 'getenv)
+               (lambda (&rest _) (ert-fail "Explicit key must take precedence")))
+              ((symbol-function 'vox-transport-open)
+               (lambda (s url headers open &rest _)
+                 (push (list s url headers open) connections)))
+              ((symbol-function 'vox-transport-send-binary)
+               (lambda (s bytes)
+                 (push (cons s (vox-json-read
+                                (decode-coding-string
+                                 (vox-doubao--gunzip (substring bytes 12)) 'utf-8-unix)))
+                       sent))))
+      (vox-doubao-connect a #'ignore #'ignore #'ignore)
+      (setq vox-doubao-second-pass nil vox--active-session b)
+      (vox-doubao-connect b #'ignore #'ignore #'ignore)
+      (setq vox-model 'invalid vox-doubao-second-pass t)
+      (should (= key-calls 2))
+      (dolist (connection connections)
+        (let ((first-p (eq (car connection) a)))
+          (should (equal (nth 1 connection)
+                         (if first-p "wss://openspeech.bytedance.com/custom?feature=one"
+                           "wss://openspeech.bytedance.com/other?feature=two")))
+          (should (equal (cdr (assoc "X-Api-Resource-Id" (nth 2 connection)))
+                         (if first-p "resource.first" "resource.second")))
+          (should (equal (cdr (assoc "X-Api-Key" (nth 2 connection)))
+                         (if first-p "synthetic-first" "synthetic-second")))
+          (funcall (nth 3 connection))))
+      (dolist (entry sent)
+        (let ((request (plist-get (cdr entry) :request)))
+          (should (equal (plist-get request :model_name)
+                         (if (eq (car entry) a) "selected" "other")))
+          (should (eq (plist-get request :enable_nonstream)
+                      (if (eq (car entry) a) t :false)))))
+      (should (= (length sent) 2)))))
+
+(ert-deftest vox-doubao-custom-host-consent-precedes-lazy-key ()
+  :tags '(vox-unit)
+  (dolist (approved '(nil t))
+    (let* ((vox-model nil) (noninteractive nil) order
+           (backend (vox-make-doubao
+                     "proxy" :host "doubao.example" :models '(proxy)
+                     :key (lambda () (push 'key order) "synthetic-key")))
+           (session (vox--make-session :generation 1
+                                      :methods (vox-backend-methods backend)))
+           (vox--active-session session))
+      (should-not order)
+      (cl-letf (((symbol-function 'yes-or-no-p)
+                 (lambda (_) (push 'consent order) approved))
+                ((symbol-function 'vox-transport-open)
+                 (lambda (&rest _) (push 'transport order))))
+        (if approved
+            (progn
+              (vox-doubao-connect session #'ignore #'ignore #'ignore)
+              (should (equal (reverse order) '(consent key transport))))
+          (should-error (vox-doubao-connect session #'ignore #'ignore #'ignore)
+                        :type 'user-error)
+          (should (equal order '(consent))))))))
+
+(ert-deftest vox-doubao-custom-host-auth-source-uses-parsed-host ()
+  :tags '(vox-unit)
+  (let* ((vox-model nil) (noninteractive nil)
+         (backend (vox-make-doubao "proxy" :host "doubao.example:9443"))
+         (session (vox--make-session :generation 1
+                                    :methods (vox-backend-methods backend)))
+         (vox--active-session session)
+         queried)
+    (cl-letf (((symbol-function 'yes-or-no-p) (lambda (_) t))
+              ((symbol-function 'auth-source-search)
+               (lambda (&rest args)
+                 (setq queried (plist-get args :host))
+                 '((:secret "synthetic-key"))))
+              ((symbol-function 'vox-transport-open) #'ignore))
+      (vox-doubao-connect session #'ignore #'ignore #'ignore)
+      (should (equal queried "doubao.example")))))
+
+(ert-deftest vox-doubao-invalid-model-never-resolves-key-or-opens-transport ()
+  :tags '(vox-unit)
+  (let ((vox-model 'not-supported) calls)
+    (cl-letf (((symbol-function 'vox-backend-secret)
+               (lambda (&rest _) (push 'key calls)))
+              ((symbol-function 'vox-transport-open)
+               (lambda (&rest _) (push 'transport calls))))
+      (should-error (vox-doubao-connect (vox--make-session) #'ignore #'ignore #'ignore))
+      (should-not calls))))
+
+(ert-deftest vox-doubao-stale-session-never-resolves-key-or-opens-transport ()
+  :tags '(vox-unit)
+  (let ((vox--active-session nil) (vox-model nil) calls
+        (session (vox--make-session :id "stale" :generation 1)))
+    (cl-letf (((symbol-function 'zlib-available-p) (lambda () t))
+              ((symbol-function 'vox-backend-secret)
+               (lambda (&rest _) (push 'key calls)))
+              ((symbol-function 'vox-transport-open)
+               (lambda (&rest _) (push 'transport calls))))
+      (let ((err (should-error
+                  (vox-doubao-connect session #'ignore #'ignore #'ignore))))
+        (should (string-match-p "no longer active" (error-message-string err))))
+      (should-not calls))))
 
 (ert-deftest vox-doubao-cancel-discards-pending-and-empty-finish ()
   :tags '(vox-unit)
@@ -240,6 +374,43 @@
     (should-not (plist-get packet :payload))
     (vox-doubao--message session bytes 'binary)
     (should (equal events '((:type :completed))))))
+
+(ert-deftest vox-doubao-reentrant-startup-cancel-prevents-secret-and-transport ()
+  :tags '(vox-unit)
+  (dolist (boundary '(approval key))
+    (let* ((vox--active-session nil) (vox--last-session nil)
+           (vox-model nil) (noninteractive nil) order opened
+           (backend (vox-make-doubao
+                     "cancel" :host "doubao.example"
+                     :key (lambda ()
+                            (push 'key order)
+                            (when (eq boundary 'key) (vox-core-cancel))
+                            "synthetic-key"))))
+      (cl-letf (((symbol-function 'yes-or-no-p)
+                 (lambda (_)
+                   (push 'approval order)
+                   (when (eq boundary 'approval) (vox-core-cancel))
+                   t))
+                ((symbol-function 'vox-transport-open)
+                 (lambda (&rest _) (setq opened t)))
+                ((symbol-function 'vox-transport-close) #'ignore)
+                ((symbol-function 'vox-audio-start)
+                 (lambda (&rest _) (ert-fail "Cancelled startup must not record")))
+                ((symbol-function 'vox-audio-cancel) #'ignore))
+        (with-temp-buffer
+          (unwind-protect
+              (let ((session (vox-core-start backend nil)))
+                (should (eq (vox-session-state session) 'cancelled))
+                (should (vox-session-cleaned session))
+                (should-not (vox-session-backend-state session))
+                (should-not (vox-session-connect-timer session))
+                (should-not (vox-current-session))
+                (should (eq vox--last-session session))
+                (should-not opened)
+                (should (equal (reverse order)
+                               (if (eq boundary 'approval) '(approval)
+                                 '(approval key)))))
+            (vox-core-cancel)))))))
 
 (provide 'vox-test-doubao)
 ;;; vox-test-doubao.el ends here

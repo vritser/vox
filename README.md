@@ -64,9 +64,31 @@ or `vox-silence-threshold`, or choose manual mode. See
 and the CLI limitation. Capture shutdown and provider finalization add latency
 after the quiet interval; 1.2 seconds is not a deadline for text insertion.
 
+## Backends and models
+
+Configure the API and available models together, using a gptel-style backend
+object (gptel is not a dependency):
+
+```elisp
+(setq vox-backend
+      (vox-make-qwen "DashScope"
+        :host "dashscope.aliyuncs.com"
+        :endpoint "/api-ws/v1/realtime"
+        :models '(qwen3-asr-flash-realtime)))
+```
+
+`vox-model` defaults to nil, meaning the first configured model. Set it to a
+configured model ID or use `M-x vox-select-model`. Backend/model choices are
+captured per recording; switching does not alter an active session. The
+[configuration guide](docs/customization.md#backends-and-models) covers Doubao,
+custom credential functions, custom endpoints, and migration from the removed
+provider API/model globals. This configures existing native ASR protocols; it
+does not make arbitrary OpenAI-compatible HTTP APIs supported.
+
 ## API key configuration
 
-Vox reads `auth-source` first, then the provider's environment variable. It does
+Unless the backend supplies an explicit `:key` function, Vox reads `auth-source`
+first, then the provider's environment variable. It does
 not load a `.env` file. An existing `auth-source` key takes priority over an
 environment key; configure the account and region you actually use. The default
 environment names below have no legacy aliases or automatic fallback.
@@ -90,7 +112,8 @@ masked prompt. The expression does not contain or print the key:
 
 This sets the environment of the running Emacs, including GUI Emacs, until it
 exits. The message confirms local configuration, not successful authentication.
-For Doubao, use `VOX_DOUBAO_API_KEY` instead and select `(setq vox-backend 'doubao)`;
+For Doubao, use `VOX_DOUBAO_API_KEY` instead and configure
+`(setq vox-backend (vox-make-doubao "SeedASR") vox-model 'bigmodel)`;
 check its [resource ID and experimental status](docs/customization.md#doubao-experimental).
 If you supply environment variables outside Emacs, set them before launching
 Emacs. A running Emacs does not pick up later terminal exports, and GUI Emacs
@@ -130,6 +153,7 @@ bindings enabled when Vox loads.
 
 | Key / command | Action |
 | --- | --- |
+| `M-x vox-select-model` | Choose a configured ASR model for the next recording |
 | `M-x vox-select-input-device` | Choose an input; prefix `C-u` saves through Customize |
 | `C-c v` / `M-x vox-toggle` | Start when idle, stop when recording; otherwise report status |
 | `C-c C-v` / `M-x vox-cancel` | Discard the session without inserting text |
@@ -157,7 +181,7 @@ See [transport and privacy limits](docs/customization.md#queueing-transport-and-
 - [Architecture](docs/architecture.md): module ownership and boundaries.
 - [Protocol audit](docs/protocol-audit.md), [transport audit](docs/transport-audit.md),
   and [fixture provenance](test/fixtures/README.md): evidence and open questions.
-- [Validation ledger](docs/validation.md): recorded results, not live-cloud acceptance.
+- [Postmortems](postmortems/README.md): historical decisions, tradeoffs, and limitations.
 - [Changelog](CHANGELOG.md): unreleased changes.
 
 ## Contributing

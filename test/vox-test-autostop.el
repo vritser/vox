@@ -199,8 +199,9 @@
     (let ((vox--active-session nil) (vox-stop-mode 'silence)
           (vox-silence-seconds 1.2) (vox-silence-threshold 0.01) connected)
       (cl-letf (((symbol-function 'vox-backend-methods)
-                 (lambda (_) (list :needs-external-audio t
-                                   :connect (lambda (&rest _) (setq connected t))))))
+                 (lambda (_ &optional _model)
+                   (list :needs-external-audio t
+                         :connect (lambda (&rest _) (setq connected t))))))
         (cl-progv (list (car setting)) (list (cadr setting))
           (should-error (vox-core-start 'autostop-test nil) :type 'user-error))
         (should-not connected)

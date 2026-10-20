@@ -12,6 +12,7 @@
 ;; Preview is ephemeral; final text is inserted once and is never submitted.
 
 ;;; Code:
+(require 'cl-lib)
 (require 'vox-core)
 (require 'vox-ui)
 (require 'vox-audio)
@@ -21,12 +22,11 @@
 (require 'vox-backend-doubao)
 (require 'vox-backend-cli)
 
-(defcustom vox-backend 'qwen "Backend used by `vox-start'."
-  :type 'symbol :group 'vox)
-
 ;;;###autoload
 (defun vox-start (&optional backend sink)
   "Start BACKEND (default `vox-backend') using SINK or a buffer sink.
+The recording captures `vox-model' (or the backend's first model);
+`vox-core-start' accepts an explicit model for one call.
 SINK is a plist of :on-preview, :on-finish, :on-state, :on-error functions.
 It receives the captured session, never the callback's current buffer.
 For a headless session with no sink use `vox-core-start' directly.
@@ -37,13 +37,14 @@ nil.  Programmatic calls require explicit input configuration and do not prompt.
   (when (vox-current-session) (user-error "A Vox session is already active"))
   (when buffer-read-only
     (unless sink (user-error "Vox target buffer is read-only")))
-  (let ((selected-backend (or backend vox-backend))
+  (let ((selected-backend (vox-backend-snapshot (or backend vox-backend)))
+        (selected-model (if (stringp vox-model) (copy-sequence vox-model) vox-model))
         (interactivep (called-interactively-p 'interactive))
         (target (current-buffer))
         (marker (copy-marker (point) t)))
     (unwind-protect
         (progn
-          (when (plist-get (vox-backend-methods selected-backend) :needs-external-audio)
+          (when (plist-get (vox-backend-methods selected-backend selected-model) :needs-external-audio)
             (unless (and (stringp vox-audio-program) (executable-find vox-audio-program))
               (user-error "FFmpeg is unavailable; configure vox-audio-program first"))
             (when (and (null vox-audio-input) interactivep)
@@ -57,8 +58,41 @@ nil.  Programmatic calls require explicit input configuration and do not prompt.
           (with-current-buffer target
             (when (and buffer-read-only (not sink))
               (user-error "Vox target buffer is read-only"))
-            (vox-core-start selected-backend (or sink (vox-make-buffer-sink)) target marker)))
+            (vox-core-start selected-backend (or sink (vox-make-buffer-sink))
+                            target marker selected-model)))
       (set-marker marker nil))))
+
+(defvar vox-model-history nil
+  "Minibuffer history of models chosen with `vox-select-model'.")
+
+;;;###autoload
+(defun vox-select-model ()
+  "Select an advertised model of `vox-backend' for the next recording.
+Change `vox-model' only; do not connect, read keys, or save configuration.
+An already active session retains its captured backend and model."
+  (interactive)
+  (let* ((backend vox-backend)
+         (configuration (plist-get (vox-backend-methods backend nil) :configuration)))
+    (unless configuration (user-error "This Vox backend does not advertise ASR models"))
+    (let* ((models (vox-backend-models configuration))
+           (choice (completing-read "Vox ASR model: " models nil t nil
+                                    'vox-model-history))
+           (model (car (member choice models))))
+      (when (and (null model) completion-ignore-case)
+        (let ((matches (cl-remove-if-not
+                        (lambda (candidate)
+                          (eq t (compare-strings choice nil nil candidate nil nil t)))
+                        models)))
+          (when (> (length matches) 1)
+            (user-error "Ambiguous ASR model; choose a candidate with its exact case"))
+          (setq model (car matches))))
+      (unless model (user-error "No ASR model selected"))
+      (unless (eq backend vox-backend)
+        (user-error "Vox backend changed during model selection; try again"))
+      (vox-backend-methods backend model)
+      (setq vox-model (copy-sequence model))
+      (message "Vox model set to %s for the next recording" model)
+      vox-model)))
 
 ;;;###autoload
 (defun vox-stop ()

@@ -78,6 +78,13 @@ threshold can mistake soft speech for silence.  Settings are captured at start."
   "Return non-nil if SESSION is live."
   (vox-session-live-p session (vox-session-generation session)))
 
+(defun vox--require-live (session generation)
+  "Signal an error unless SESSION still owns GENERATION.
+Adapters call this before and after user callbacks, because endpoint approval
+and key functions may reentrantly cancel the session."
+  (unless (vox-session-live-p session generation)
+    (error "Vox session is no longer active")))
+
 (defun vox--notify (session key &rest args)
   "Notify SESSION sink KEY with ARGS.  Never print sink exceptions."
   (when-let* ((fn (plist-get (vox-session-sink session) key)))
@@ -151,8 +158,10 @@ threshold can mistake soft speech for silence.  Settings are captured at start."
       (condition-case nil (apply function args)
         (error (vox-core-fail session "Vox callback failed; session safely stopped"))))))
 
-(defun vox-core-start (backend sink &optional buffer marker)
+(cl-defun vox-core-start (backend sink &optional buffer marker (model vox-model))
   "Start BACKEND with SINK, capturing BUFFER and MARKER as output ownership.
+MODEL defaults to `vox-model'; explicit nil selects the backend's first model.
+Backend configuration and model are captured before callbacks or connection.
 A nil SINK is supported for headless callers.  MARKER is copied and follows
 text typed at the original insertion point.  Return the new session."
   (when vox--active-session (user-error "A Vox session is already active"))
@@ -165,7 +174,7 @@ text typed at the original insertion point.  Return the new session."
                (> vox-connect-timeout 0) (> vox-stop-timeout 0)
                (> vox-max-session-seconds 0) (> vox-preview-interval 0))
     (user-error "Invalid Vox limits"))
-  (let* ((methods (copy-sequence (vox-backend-methods backend)))
+  (let* ((methods (copy-sequence (vox-backend-methods backend model)))
          (stop-mode (if (and (eq vox-stop-mode 'silence)
                              (plist-get methods :needs-external-audio))
                         'silence 'manual))
@@ -177,7 +186,9 @@ text typed at the original insertion point.  Return the new session."
          (target (or buffer (current-buffer)))
          (session (vox--make-session
                    :id (format "vox-%s-%d" (format-time-string "%s%N") generation)
-                   :generation generation :backend backend :methods methods
+                   :generation generation
+                   :backend (or (plist-get methods :configuration) backend)
+                   :methods methods
                    :stop-mode stop-mode :activity activity
                    :state 'connecting :sink sink :target-buffer target
                    :target-marker (with-current-buffer target (copy-marker (or marker (point)) t))
@@ -203,6 +214,7 @@ text typed at the original insertion point.  Return the new session."
              (vox--guard session generation (lambda () (vox--ready session)))
              (vox--guard session generation (lambda (event) (vox-core-event session event)))
              (vox--guard session generation (lambda (message) (vox-core-fail session message))))))
+      (quit (vox-core-cancel session) (signal 'quit nil))
       (error (vox-core-fail session "Backend setup failed; check credentials, endpoint and dependencies")))
     session))
 

@@ -7,8 +7,8 @@ root; the development layout does not add a runtime dependency or change the API
 
 | Module | Owns |
 | --- | --- |
-| [vox.el](../vox.el) | Public commands, default backend, explicit transcript recovery |
-| [vox-backend.el](../vox-backend.el) | Backend registration/contracts, JSON helpers, credentials, endpoint validation |
+| [vox.el](../vox.el) | Public commands, model selection, explicit transcript recovery |
+| [vox-backend.el](../vox-backend.el) | Backend objects/factories, default configuration and model selection data, registration/contracts, JSON helpers, lazy credentials, endpoint validation |
 | [vox-core.el](../vox-core.el) | Session lifecycle, callback generations, transcript reconciliation, PCM queue/chunker, automatic stop requests, completion and cleanup |
 | [vox-activity.el](../vox-activity.el) | Pure bounded PCM energy analysis, 20 ms windows, speech arming and quiet-duration eligibility; no timers, I/O, or transcript decisions |
 | [vox-device.el](../vox-device.el) | On-demand bounded FFmpeg listings, platform parsers, explicit minibuffer input selection and opt-in persistence |
@@ -54,6 +54,13 @@ public commands -> session core -> backend contract -> provider / CLI
   an explicit save request. Startup captures its target buffer/marker and backend
   before completion, then rechecks ownership/editability afterward. Programmatic
   startup and self-recording CLI do not prompt for devices.
+- Backend factories are pure configuration construction. Core captures a detached
+  backend object and selected model in method metadata before state callbacks;
+  public startup also snapshots them before the device picker. Key functions stay
+  lazy and their returned secrets are never cached in those objects. Adapters
+  approve the captured endpoint before resolving credentials, recheck session
+  ownership after approval/key callbacks, and capture the initial provider request
+  before asynchronous transport opening. Model selection affects future sessions.
 - Loading Vox is silent and does not start capture or connect. Backend registration
   is package setup, not permission to send audio.
 
@@ -81,5 +88,4 @@ Qwen's authenticated flow remains unvalidated; Doubao is experimental. FFmpeg
 interruption can truncate capture tails. Bounded PCM queues cannot prevent a
 native socket write from blocking, and native gzip decompression has no hard
 in-call allocation cap. Preserve the distinctions in the
-[protocol audit](protocol-audit.md), [transport audit](transport-audit.md), and
-[validation ledger](validation.md).
+[protocol audit](protocol-audit.md) and [transport audit](transport-audit.md).

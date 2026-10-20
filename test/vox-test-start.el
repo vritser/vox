@@ -11,21 +11,21 @@
   "Run BODY with fake input selection and a captured core start."
   (declare (indent 0) (debug t))
   `(let ((vox--active-session nil) (vox-audio-input nil)
-         (vox-audio-program "synthetic-ffmpeg") (vox-backend 'qwen)
+         (vox-audio-program "synthetic-ffmpeg") (vox-backend 'qwen) (vox-model nil)
          (noninteractive nil) (external t) (selected 0) (started 0)
          (selection '("-f" "avfoundation" "-i" ":2")) start-args)
      (cl-letf (((symbol-function 'vox-backend-methods)
-                (lambda (_) (list :needs-external-audio external)))
+                (lambda (_ &optional _model) (list :needs-external-audio external)))
                ((symbol-function 'executable-find) (lambda (_) "/synthetic/ffmpeg"))
                ((symbol-function 'vox-select-input-device)
                 (lambda (&optional _) (cl-incf selected)
                   (setq vox-audio-input (copy-sequence selection))))
                ((symbol-function 'vox-core-start)
-                (lambda (backend sink &optional buffer marker)
+                (lambda (backend sink &optional buffer marker model)
                   (cl-incf started)
                   (setq start-args (list backend sink buffer
                                          (when marker (marker-position marker))
-                                         (current-buffer)))
+                                         (current-buffer) model))
                   'started)))
        (with-temp-buffer ,@body))))
 
@@ -173,6 +173,33 @@
                  (lambda (&optional _) (setq vox-audio-input invalid))))
         (should-error (call-interactively #'vox-start) :type 'user-error))
       (should (= started 0)))))
+
+(ert-deftest vox-start-picker-cannot-retarget-model-or-backend-fields ()
+  :tags '(vox-unit)
+  (vox-start-test--stub
+    (setq vox-backend (vox-make-qwen "Synthetic" :models '(first second))
+          vox-model (copy-sequence "first"))
+    (cl-letf (((symbol-function 'vox-select-input-device)
+               (lambda (&optional _)
+                 (setq vox-audio-input selection)
+                 (aset vox-model 0 ?X)
+                 (setf (vox-backend-host vox-backend) "changed.example"
+                       (vox-backend-models vox-backend) '("changed"))
+                 (setq vox-model "second"))))
+      (call-interactively #'vox-start))
+    (should (equal (nth 5 start-args) "first"))
+    (should-not (eq (car start-args) vox-backend))
+    (should (equal (vox-backend-host (car start-args)) "dashscope.aliyuncs.com"))
+    (should (equal (vox-backend-models (car start-args)) '("first" "second")))))
+
+(ert-deftest vox-start-default-model-choice-survives-picker ()
+  :tags '(vox-unit)
+  (vox-start-test--stub
+    (cl-letf (((symbol-function 'vox-select-input-device)
+               (lambda (&optional _)
+                 (setq vox-audio-input selection vox-model "changed"))))
+      (call-interactively #'vox-start))
+    (should-not (nth 5 start-args))))
 
 (provide 'vox-test-start)
 ;;; vox-test-start.el ends here

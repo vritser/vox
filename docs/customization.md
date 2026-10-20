@@ -10,13 +10,15 @@ group. Cloud recognition is not live-validated; Doubao remains experimental.
 (use-package vox
   :load-path "/path/to/vox"
   :ensure nil
-  :commands (vox-toggle vox-start vox-stop vox-cancel vox-select-input-device)
+  :commands (vox-toggle vox-start vox-stop vox-cancel vox-select-input-device vox-select-model)
   :custom
-  (vox-backend 'qwen)
   (vox-qwen-language "zh")
   (vox-preview t)
   :bind (("C-c v" . vox-toggle)
-         ("C-c C-v" . vox-cancel)))
+         ("C-c C-v" . vox-cancel))
+  :config
+  (setq vox-backend (vox-make-qwen "DashScope")
+        vox-model 'qwen3-asr-flash-realtime))
 ```
 
 Install `websocket` through your normal Emacs package manager. Do not add `.deps`
@@ -129,6 +131,71 @@ For an explicit, non-microphone source:
 Starting a **cloud** backend with that virtual source still sends audio to the
 provider and can incur charges. Offline ERT tests use a local fake provider.
 
+## Backends and models
+
+Configuration follows the backend-object/model-selection pattern used by
+[gptel](https://github.com/karthink/gptel), without depending on gptel or sharing
+its HTTP protocols. API settings belong to a backend object, not a separate set
+of provider globals:
+
+```elisp
+(setq vox-backend
+      (vox-make-qwen "DashScope"
+        :host "dashscope.aliyuncs.com"
+        :endpoint "/api-ws/v1/realtime"
+        :models '(qwen3-asr-flash-realtime)))
+(setq vox-model 'qwen3-asr-flash-realtime)
+```
+
+`vox-backend` is configured in Lisp initialization code. It is a plain variable,
+not a `defcustom`, so it no longer appears in Customize; `setq`,
+`:custom (vox-backend 'qwen)`, and saved `custom-set-variables` forms still set it.
+The constructors are pure: they do not connect, read keys, enumerate devices, or
+modify files. `vox-model` accepts a symbol/string; nil uses the first model in
+the backend's `:models` list. Run `M-x vox-select-model` to choose among those
+configured IDs without querying a server or saving settings; it reports the
+chosen model and keeps the choice in `vox-model-history`. An unlisted model is
+rejected, not silently replaced. The list is an explicit allowlist, not proof
+that your account can access each model. Configure only models supported by the
+selected provider's realtime protocol.
+
+Both constructors accept a display NAME, `:host`, `:endpoint`, `:models`, and
+`:key`. Hosts are DNS names or IPv4 addresses with an optional port, without a
+scheme or path. Endpoints are absolute paths, optionally with query parameters;
+Vox always uses WSS. For Qwen the selected model replaces any existing `model`
+query parameter, including on custom endpoints; it is never ignored just because
+a custom endpoint is supplied. Doubao sends the selected ID in `model_name` and
+also accepts the separate `:resource-id` entitlement/billing option.
+
+Omit `:key` (or use nil) for the default auth-source/environment behavior below.
+For a custom credential source, provide a zero-argument function, not a plaintext
+key string. It is called only when connecting, after endpoint approval:
+
+```elisp
+(setq vox-backend
+      (vox-make-qwen "Custom credential source"
+        :key (lambda () (getenv "MY_ASR_KEY"))))
+```
+
+An explicit `:key` function replaces default credential lookup; it has no hidden
+fallback. The result is checked for empty values and header control characters,
+and callback errors are redacted. Do not capture a literal key in a saved lambda.
+Backend/model configuration is copied before startup callbacks and the device
+picker. Editing the original object or selecting another model affects the next
+recording, not an active one. Canceling during credential acquisition tears down
+the pending session without opening transport afterward.
+
+**Direct migration:** remove uses of `vox-qwen-model`, `vox-qwen-endpoint`,
+`vox-doubao-endpoint`, `vox-doubao-resource-id`, and
+`vox-doubao-key-environment`. There are no compatibility aliases. Move their
+settings into the constructor and `vox-model`; use a `:key` function for a custom
+environment name. Update your init and restart Emacs rather than mixing old
+loaded adapter definitions with the new configuration API. Audio-device,
+silence-detection, language/VAD, and packet-size options are unchanged. The
+self-recording CLI remains `(setq vox-backend 'cli)` and manages its own model.
+Built-in `qwen`/`doubao` registry symbols still select factory defaults, but custom
+API configuration uses objects.
+
 ## Credentials and regions
 
 The [README API key setup](../README.md#api-key-configuration) includes a masked
@@ -152,8 +219,8 @@ takes priority over environment variables.
 Alternatively provide `VOX_QWEN_API_KEY` or `VOX_DOUBAO_API_KEY` in the environment
 that starts Emacs. Do not put real keys in shell history, source code, issues,
 or command-line arguments. GUI Emacs may not inherit your terminal's environment.
-There are no legacy-name aliases or automatic fallbacks. The
-`vox-doubao-key-environment` option explicitly selects a single variable name.
+There are no legacy-name aliases or automatic fallbacks. For a different
+credential source, configure the backend's explicit `:key` function.
 
 ### Qwen
 
@@ -161,8 +228,11 @@ Qwen defaults to the Beijing public endpoint and model
 `qwen3-asr-flash-realtime`. It is a VAD-only adapter. For Singapore:
 
 ```elisp
-(setq vox-qwen-endpoint
-      "wss://dashscope-intl.aliyuncs.com/api-ws/v1/realtime?model=qwen3-asr-flash-realtime")
+(setq vox-backend
+      (vox-make-qwen "DashScope Singapore"
+        :host "dashscope-intl.aliyuncs.com"
+        :models '(qwen3-asr-flash-realtime))
+      vox-model 'qwen3-asr-flash-realtime)
 ```
 
 Confirm model availability, account permissions, region, and business-space
@@ -174,15 +244,18 @@ verification are not disabled.
 ### Doubao (experimental)
 
 ```elisp
-(setq vox-backend 'doubao
-      vox-doubao-resource-id "volc.seedasr.sauc.duration"
+(setq vox-backend
+      (vox-make-doubao "SeedASR"
+        :models '(bigmodel)
+        :resource-id "volc.seedasr.sauc.duration")
+      vox-model 'bigmodel
       vox-doubao-second-pass t
       vox-doubao-chunk-ms 200)
 ```
 
 The resource ID must match your account's entitlement/billing mode. Doubao uses
-the audited `bigmodel_async` binary framing, `model_name="bigmodel"`, and full
-snapshots only. It keeps one PCM frame for the final negative-sequence packet.
+the audited `bigmodel_async` binary framing, defaults to `model_name="bigmodel"`,
+and accepts full snapshots only. It keeps one PCM frame for the final negative-sequence packet.
 Python and Go examples are protocol references, not dependencies. The real
 handshake, microphone stream, stored-block gzip acceptance, empty-audio finish,
 and authoritative final response remain live integration checks.

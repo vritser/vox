@@ -9,16 +9,6 @@
 (require 'vox-transport)
 (require 'vox-core)
 
-(defcustom vox-doubao-endpoint
-  "wss://openspeech.bytedance.com/api/v3/sauc/bigmodel_async"
-  "Experimental SeedASR realtime WSS endpoint."
-  :type 'string :group 'vox)
-(defcustom vox-doubao-resource-id "volc.seedasr.sauc.duration"
-  "SeedASR resource ID; it must match the account's entitlement."
-  :type 'string :group 'vox)
-(defcustom vox-doubao-key-environment "VOX_DOUBAO_API_KEY"
-  "Environment variable used after auth-source for the Doubao API key."
-  :type 'string :group 'vox)
 (defcustom vox-doubao-second-pass t
   "Whether to request second-pass revisions of full snapshots."
   :type 'boolean :group 'vox)
@@ -156,11 +146,11 @@ Sequence, last-p, and event are envelope fields, not JSON body fields."
           :payload (when (and (= serialization 1) (> (length payload) 0))
                      (vox-json-read (decode-coding-string payload 'utf-8-unix))))))
 
-(defun vox-doubao-config ()
-  "Build the full-result PCM request object."
+(defun vox-doubao-config (&optional model)
+  "Build the full-result PCM request object for MODEL, defaulting to bigmodel."
   (list :user (list :uid "vox")
         :audio (list :format "pcm" :codec "raw" :rate 16000 :bits 16 :channel 1)
-        :request (list :model_name "bigmodel" :enable_itn t :enable_punc t
+        :request (list :model_name (or model "bigmodel") :enable_itn t :enable_punc t
                        :show_utterances t
                        :enable_nonstream (if vox-doubao-second-pass t :false)
                        :result_type "full")))
@@ -221,31 +211,39 @@ not specified.  WebSocket message order supplies local snapshot order."
 
 (defun vox-doubao-connect (session on-ready on-event on-error)
   "Connect experimental SESSION using ON-READY, ON-EVENT, ON-ERROR."
-  (unless (and (fboundp 'zlib-available-p) (zlib-available-p))
-    (error "Doubao requires Emacs native zlib support"))
-  (unless (and (stringp vox-doubao-resource-id)
-               (string-match-p "\\`[A-Za-z0-9._-]+\\'" vox-doubao-resource-id))
-    (error "Invalid Doubao resource ID"))
-  (vox-check-endpoint vox-doubao-endpoint '("openspeech.bytedance.com"))
-  (let ((secret (vox-secret (url-host (url-generic-parse-url vox-doubao-endpoint))
-                            vox-doubao-key-environment)))
-    (setf (vox-session-backend-state session)
-          (list :on-ready on-ready :on-event on-event :on-error on-error :sequence 2))
-    (vox-transport-open
-     session vox-doubao-endpoint
-     (list (cons "X-Api-Key" secret) (cons "X-Api-Resource-Id" vox-doubao-resource-id)
-           (cons "X-Api-Request-Id" (vox-doubao--request-id)))
-     (lambda ()
-       (vox-transport-send-binary
-        session (vox-doubao-encode
-                 1 1 (encode-coding-string (vox-json-encode (vox-doubao-config))
-                                          'utf-8-unix))))
-     (lambda (payload opcode) (vox-doubao--message session payload opcode))
-     on-error
-     (lambda ()
-       (let ((state (vox-session-backend-state session)))
-         (unless (or (plist-get state :closed) (plist-get state :completed))
-           (funcall on-error "Doubao connection closed before final response")))))))
+  (let* ((generation (vox-session-generation session))
+         (_ (unless (and (fboundp 'zlib-available-p) (zlib-available-p))
+              (error "Doubao requires Emacs native zlib support")))
+         (methods (if (plist-get (vox-session-methods session) :configuration)
+                      (vox-session-methods session)
+                    (vox-backend-methods 'doubao)))
+         (configuration (plist-get methods :configuration))
+         (model (plist-get methods :model))
+         (url (vox-backend-url configuration model))
+         (resource-id (vox-backend-resource-id configuration))
+         ;; Endpoint approval and key functions may reentrantly cancel SESSION.
+         (_ (vox--require-live session generation))
+         (_ (vox-check-endpoint url '("openspeech.bytedance.com")))
+         (_ (vox--require-live session generation))
+         (secret (vox-backend-secret
+                  configuration (url-host (url-generic-parse-url url)))))
+    (vox--require-live session generation)
+    (let ((request (vox-doubao-encode
+                    1 1 (encode-coding-string
+                         (vox-json-encode (vox-doubao-config model)) 'utf-8-unix))))
+      (setf (vox-session-backend-state session)
+            (list :on-ready on-ready :on-event on-event :on-error on-error :sequence 2))
+      (vox-transport-open
+       session url
+       (list (cons "X-Api-Key" secret) (cons "X-Api-Resource-Id" resource-id)
+             (cons "X-Api-Request-Id" (vox-doubao--request-id)))
+       (lambda () (vox-transport-send-binary session request))
+       (lambda (payload opcode) (vox-doubao--message session payload opcode))
+       on-error
+       (lambda ()
+         (let ((state (vox-session-backend-state session)))
+           (unless (or (plist-get state :closed) (plist-get state :completed))
+             (funcall on-error "Doubao connection closed before final response"))))))))
 
 (defun vox-doubao-send-pcm (session bytes)
   "Queue PCM BYTES for SESSION, retaining one packet for the end marker."

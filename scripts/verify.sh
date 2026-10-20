@@ -116,7 +116,7 @@ run 'source-tree hygiene' hygiene "$EMACS" -Q --batch --eval '
                         (or (file-regular-p file) (file-symlink-p file)))
                    (push file junk))
                   ((and (file-directory-p file) (not (file-symlink-p file))
-                        (or recurse (member name (quote ("scripts" "test" "docs")))))
+                        (or recurse (member name (quote ("scripts" "test" "docs" "postmortems")))))
                    (scan file t))))))))
       (scan default-directory nil))
     (when junk

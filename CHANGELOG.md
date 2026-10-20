@@ -4,6 +4,28 @@
 
 ### Added
 
+- **Historical decision records:** a [postmortem index and template](postmortems/README.md)
+  preserve the rationale for silence stopping, explicit device selection, and
+  backend/model configuration. Contributor rules cover when to write a record,
+  evidence links, and supersession without rewriting historical conclusions.
+
+- **Optional coverage report:** `scripts/check-coverage.el` instruments production
+  modules with testcover, runs the offline suite, and lists definitions below 80%
+  coverage. It is diagnostic and stays outside `scripts/verify.sh`.
+
+- **Backend objects and model selection (breaking configuration change):**
+  `vox-make-qwen` / `vox-make-doubao` group host, endpoint, available models,
+  deferred key source and provider resource options. `vox-backend` selects the
+  object; `vox-model` or `vox-select-model` chooses a configured model. The former
+  provider API/model globals are removed without aliases; `vox-backend` itself is
+  now a plain variable rather than a Customize option, though `setq`, `:custom`,
+  and saved settings still apply it. Configuration is
+  captured per session and before device prompting; custom Qwen URLs honor the
+  selected model. Endpoint approval precedes key lookup, and cancellation during
+  approval or key callbacks cannot open a stale connection. See the migration
+  instructions in [Customization](docs/customization.md#backends-and-models)
+  (rationale: [postmortem 003](postmortems/003-backend-objects-and-model-selection.md)).
+
 - **Minibuffer input selection:** `vox-select-input-device` enumerates FFmpeg
   AVFoundation, DirectShow, or PulseAudio inputs and requires an explicit choice.
   First interactive start prompts only when input is unset; existing argv,
@@ -12,7 +34,8 @@
   and no raw-listing logging; startup preserves its original insertion target
   and backend across the prompt. Failed or canceled saves restore Customize
   metadata so later saves cannot persist the rejected selection.
-  Real-device enumeration remains unvalidated.
+  Real-device enumeration remains unvalidated
+  (rationale: [postmortem 002](postmortems/002-explicit-input-device-selection.md)).
 
 - **Native streaming speech input:** independent Emacs 28.1+ package with Qwen
   VAD, experimental Doubao, and an optional UTF-8 NDJSON v1 CLI backend. No
@@ -36,7 +59,8 @@
   `vox-silence-threshold`; manual mode bypasses analysis. The bounded energy
   detector does not classify human speech, and initial silence does not arm it.
   Authoritative completion still gates one final insertion. Self-recording CLI
-  remains manual, with the effective mode shown in recording status.
+  remains manual, with the effective mode shown in recording status
+  (rationale: [postmortem 001](postmortems/001-short-phrase-silence-stop.md)).
 
 - **Namespaced credential environment:** Qwen reads `VOX_QWEN_API_KEY` and
   Doubao defaults to `VOX_DOUBAO_API_KEY`. The previous environment names have
@@ -91,7 +115,7 @@
 - **Transport and capture limits remain:** native writes may block despite bounded
   queues; native gzip decoding has no hard allocation cap during decompression;
   FFmpeg interruption may truncate the final capture block.
-- **Measurements remain scoped:** the earlier 82-test result is historical,
-  not a new run count. Accelerated benchmark figures do not measure wall-clock
-  capture/network/UI responsiveness. See the [validation ledger](docs/validation.md)
-  and [manual acceptance checklist](docs/development.md#benchmark-and-acceptance).
+- **Measurements remain scoped:** earlier test counts are historical, not current
+  run counts. Accelerated benchmark figures do not measure wall-clock
+  capture/network/UI responsiveness. See the
+  [manual acceptance checklist](docs/development.md#benchmark-and-acceptance).
