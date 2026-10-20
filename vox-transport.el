@@ -1,0 +1,339 @@
+;;; vox-transport.el --- Guarded WebSocket transport -*- lexical-binding: t; -*-
+
+;;; Commentary:
+;; websocket.el is optional until connect.  See docs/transport-audit.md for
+;; the narrowly scoped upstream asynchronous-handshake compatibility shim.
+
+;;; Code:
+(require 'cl-lib)
+(require 'subr-x)
+(require 'url-parse)
+(require 'gnutls)
+(require 'vox-core)
+
+(defgroup vox-transport nil "WebSocket transport for Vox." :group 'vox)
+(defcustom vox-transport-max-message-bytes (* 1024 1024)
+  "Maximum bytes in one incoming or outgoing WebSocket message."
+  :type 'integer :group 'vox-transport)
+(defcustom vox-transport-max-fragments 1024
+  "Maximum frames in a fragmented message, including empty frames."
+  :type 'integer :group 'vox-transport)
+(defcustom vox-transport-send-timeout 1.0
+  "Fail if a socket write takes longer than this many seconds.
+This is measured AFTER the native write returns; it cannot interrupt a
+blocked process-send-string and is not strict network backpressure."
+  :type 'number :group 'vox-transport)
+
+(defvar websocket-debug)
+(defvar websocket-callback-debug-on-error)
+(declare-function websocket-open "websocket" (url &rest args))
+(declare-function websocket-ensure-handshake "websocket"
+                  (url conn key protocols extensions headers nowait))
+(declare-function websocket-close "websocket" (ws))
+(declare-function websocket-send "websocket" (ws frame))
+(declare-function websocket-send-text "websocket" (ws text))
+(declare-function websocket-ready-state "websocket" (ws))
+(declare-function websocket-conn "websocket" (ws))
+(declare-function websocket-inflight-input "websocket" (ws))
+(declare-function websocket-frame-payload "websocket" (frame))
+(declare-function websocket-frame-opcode "websocket" (frame))
+(declare-function websocket-frame-completep "websocket" (frame))
+(declare-function make-websocket-frame "websocket" (&rest args))
+
+(cl-defstruct (vox-transport--context (:constructor vox-transport--make-context))
+  session generation websocket process on-error closed failed opened
+  fragments opcode (size 0) (count 0))
+
+(defvar vox-transport--contexts (make-hash-table :test #'eq :weakness 'key))
+(defvar vox-transport--opening nil
+  "Dynamically bound context during a Vox connection's creation.")
+
+(defun vox-transport--live-p (context)
+  "Whether CONTEXT can deliver application callbacks."
+  (and (not (vox-transport--context-closed context))
+       (not (vox-transport--context-failed context))
+       (vox-session-live-p (vox-transport--context-session context)
+                           (vox-transport--context-generation context))))
+
+(defun vox-transport--reset-fragments (context)
+  "Drop all retained message data in CONTEXT."
+  (setf (vox-transport--context-fragments context) nil
+        (vox-transport--context-opcode context) nil
+        (vox-transport--context-size context) 0
+        (vox-transport--context-count context) 0))
+
+(defun vox-transport--dispose (context)
+  "Reclaim CONTEXT's socket without delivering application callbacks."
+  (setf (vox-transport--context-closed context) t)
+  (vox-transport--reset-fragments context)
+  (let* ((session (vox-transport--context-session context))
+         (ws (vox-transport--context-websocket context))
+         (process (vox-transport--context-process context))
+         (websocket-debug nil)
+         (websocket-callback-debug-on-error nil))
+    (when (eq ws (vox-session-websocket session))
+      (setf (vox-session-websocket session) nil))
+    (when (eq context (gethash session vox-transport--contexts))
+      (remhash session vox-transport--contexts))
+    (when (processp process)
+      (set-process-filter process #'ignore)
+      (set-process-sentinel process #'ignore)
+      (process-put process 'vox-transport-context nil))
+    ;; On cancellation, do not send a close frame: process-send-string can
+    ;; block on a congested peer.  Reclaim the process directly instead.
+    (when (processp process) (ignore-errors (delete-process process)))))
+
+(defun vox-transport--fail (context safe-message)
+  "Report fixed SAFE-MESSAGE once for CONTEXT, without raw error data."
+  (let ((live (vox-transport--live-p context)))
+    (setf (vox-transport--context-failed context) t)
+    (vox-transport--dispose context)
+    (when live
+      (condition-case nil
+          (when (vox-session-live-p (vox-transport--context-session context)
+                                   (vox-transport--context-generation context))
+            (funcall (vox-transport--context-on-error context) safe-message))
+        (error nil)))))
+
+(defun vox-transport--handshake (original url conn key protocols extensions headers nowait)
+  "Defer ORIGINAL's handshake for a Vox-owned CONN until TCP/TLS is open.
+URL, KEY, PROTOCOLS, EXTENSIONS, HEADERS and NOWAIT are upstream arguments.
+Non-Vox connections pass through untouched.  No HTTP or RFC encoding is
+implemented here; the upstream handshake function still does all of it."
+  (let ((context (or (process-get conn 'vox-transport-context)
+                     vox-transport--opening)))
+    (if (not context)
+        (funcall original url conn key protocols extensions headers nowait)
+      (process-put conn 'vox-transport-context context)
+      (setf (vox-transport--context-process context) conn
+            (vox-transport--context-websocket context)
+            (process-get conn :websocket))
+      (when (and (vox-transport--live-p context)
+                 (memq (process-status conn) '(open run)))
+        (let ((websocket-debug nil)
+              (websocket-callback-debug-on-error nil))
+          (funcall original url conn key protocols extensions headers nil))))))
+
+(defun vox-transport--check-dependency ()
+  "Load optional websocket.el and verify the APIs required by this adapter."
+  (unless (require 'websocket nil t)
+    (user-error "Install websocket.el before connecting Vox"))
+  (unless (and (gnutls-available-p)
+               (cl-every #'fboundp
+                         '(websocket-open websocket-send websocket-send-text
+                           websocket-close websocket-ready-state websocket-conn
+                           websocket-inflight-input websocket-frame-payload
+                           websocket-frame-opcode websocket-frame-completep
+                           make-websocket-frame websocket-ensure-handshake))
+               (or (advice-member-p #'vox-transport--handshake 'websocket-ensure-handshake)
+                   (equal (func-arity #'websocket-ensure-handshake) '(7 . 7))))
+    (user-error "Unsupported WebSocket API or missing native GnuTLS"))
+  (unless (advice-member-p #'vox-transport--handshake 'websocket-ensure-handshake)
+    (advice-add 'websocket-ensure-handshake :around #'vox-transport--handshake)))
+
+(defun vox-transport--validate (url headers)
+  "Validate URL and HEADERS without including their contents in errors."
+  (unless (and (integerp vox-transport-max-message-bytes)
+               (> vox-transport-max-message-bytes 0)
+               (integerp vox-transport-max-fragments)
+               (> vox-transport-max-fragments 0)
+               (numberp vox-transport-send-timeout)
+               (> vox-transport-send-timeout 0))
+    (user-error "Invalid Vox transport limits"))
+  (unless (and (stringp url)
+               (not (string-match-p "[\r\n\x00]" url))
+               (let ((parsed (url-generic-parse-url url)))
+                 (and (equal (url-type parsed) "wss")
+                      (not (string-empty-p (or (url-host parsed) "")))
+                      (not (url-user parsed)) (not (url-password parsed))
+                      (not (url-target parsed)))))
+    (user-error "Vox requires a WSS URL without userinfo or fragment"))
+  (unless (and (proper-list-p headers)
+               (cl-every
+                (lambda (entry)
+                  (and (consp entry) (stringp (car entry)) (stringp (cdr entry))
+                       (string-match-p "\\`[!#$%&'*+.^_`|~0-9A-Za-z-]+\\'" (car entry))
+                       (not (string-match-p "[\r\n\x00]" (cdr entry)))))
+                headers))
+    (user-error "Invalid WebSocket headers")))
+
+(defun vox-transport--frame (context frame on-message)
+  "Reassemble FRAME in CONTEXT and call ON-MESSAGE only on whole messages."
+  (let ((opcode (websocket-frame-opcode frame))
+        (payload (websocket-frame-payload frame))
+        (complete (websocket-frame-completep frame)))
+    (unless (memq opcode '(text binary continuation))
+      (error "Unexpected WebSocket opcode"))
+    (unless (and (stringp payload) (not (multibyte-string-p payload)))
+      (error "WebSocket payload must be binary"))
+    (if (eq opcode 'continuation)
+        (unless (vox-transport--context-opcode context)
+          (error "Unexpected continuation"))
+      (when (vox-transport--context-opcode context)
+        (error "Overlapping fragmented messages"))
+      (setf (vox-transport--context-opcode context) opcode))
+    (cl-incf (vox-transport--context-size context) (length payload))
+    (cl-incf (vox-transport--context-count context))
+    (when (or (> (vox-transport--context-size context) vox-transport-max-message-bytes)
+              (> (vox-transport--context-count context) vox-transport-max-fragments))
+      (error "WebSocket message limit exceeded"))
+    (push payload (vox-transport--context-fragments context))
+    (when complete
+      (let* ((kind (vox-transport--context-opcode context))
+             (bytes (apply #'concat (nreverse (vox-transport--context-fragments context))))
+             (text (if (eq kind 'text) (decode-coding-string bytes 'utf-8) bytes)))
+        (vox-transport--reset-fragments context)
+        ;; Emacs represents malformed UTF-8 octets as raw-byte characters.
+        (when (and (eq kind 'text)
+                   (cl-some (lambda (char) (>= char #x3fff80)) text))
+          (error "Invalid UTF-8 text frame"))
+        (funcall on-message text kind)))))
+
+(defun vox-transport--wrap-process (context)
+  "Protect CONTEXT's upstream filter and sentinel before asynchronous I/O."
+  (let* ((process (vox-transport--context-process context))
+         (filter (process-filter process))
+         (sentinel (process-sentinel process)))
+    (set-process-coding-system process 'binary 'binary)
+    (set-process-query-on-exit-flag process nil)
+    (set-process-filter
+     process
+     (lambda (proc bytes)
+       (let ((websocket-debug nil) (websocket-callback-debug-on-error nil))
+         (condition-case nil
+             (when (vox-transport--live-p context)
+               ;; Upstream retains incomplete wire frames before on-message.
+               ;; Bound that storage too, not only completed fragment payloads.
+               (let* ((ws (vox-transport--context-websocket context))
+                      (limit (if (eq (websocket-ready-state ws) 'connecting)
+                                 16384 (+ 14 vox-transport-max-message-bytes))))
+                 (unless (and (stringp bytes) (not (multibyte-string-p bytes))
+                              (<= (+ (length bytes)
+                                     (length (websocket-inflight-input ws))) limit))
+                   (error "WebSocket input limit exceeded")))
+               (funcall filter proc bytes))
+           (error (vox-transport--fail context "WebSocket input rejected or callback failed"))))))
+    (set-process-sentinel
+     process
+     (lambda (proc event)
+       (let ((websocket-debug nil) (websocket-callback-debug-on-error nil))
+         (condition-case nil
+             (when (vox-transport--live-p context) (funcall sentinel proc event))
+           (error (vox-transport--fail context "WebSocket connection failed"))))))))
+
+(defun vox-transport-open (session url headers on-open on-message on-error on-close)
+  "Connect SESSION to WSS URL with HEADERS, without waiting for connection.
+ON-OPEN and ON-CLOSE take no arguments.  ON-MESSAGE receives (payload opcode),
+where text is decoded UTF-8 and binary is unibyte.  ON-ERROR receives only a
+fixed safe string.  Return the websocket and set SESSION's websocket slot."
+  (vox-transport--validate url headers)
+  (vox-transport--check-dependency)
+  (let* ((generation (vox-session-generation session))
+         (context (vox-transport--make-context
+                   :session session :generation generation :on-error on-error))
+         (gnutls-verify-error t)
+         (gnutls-log-level 0)
+         (websocket-debug nil)
+         (websocket-callback-debug-on-error nil)
+         (vox-transport--opening context))
+    (unless (vox-session-live-p session generation)
+      (user-error "Cannot connect an inactive session"))
+    (when (vox-session-websocket session)
+      (user-error "This session already owns a WebSocket"))
+    (puthash session context vox-transport--contexts)
+    (condition-case nil
+        (let ((ws
+               (websocket-open
+                url :custom-header-alist headers :nowait t
+                :on-open
+                (lambda (socket)
+                  (condition-case nil
+                      (when (and (vox-transport--live-p context)
+                                 (not (vox-transport--context-opened context)))
+                        (setf (vox-transport--context-opened context) t
+                              (vox-session-websocket session) socket)
+                        (funcall on-open))
+                    (error (vox-transport--fail context "WebSocket open callback failed"))))
+                :on-message
+                (lambda (_socket frame)
+                  (condition-case nil
+                      (when (vox-transport--live-p context)
+                        (vox-transport--frame context frame on-message))
+                    (error (vox-transport--fail context "WebSocket message rejected or callback failed"))))
+                :on-error
+                (lambda (_socket _type _raw-error)
+                  (condition-case nil
+                      (when (vox-transport--live-p context)
+                        (vox-transport--fail context "WebSocket connection or protocol error"))
+                    (error nil)))
+                :on-close
+                (lambda (_socket)
+                  (condition-case nil
+                      (when (vox-transport--live-p context)
+                        (vox-transport--dispose context)
+                        (condition-case nil
+                            (funcall on-close)
+                          (error
+                           (when (vox-session-live-p session generation)
+                             (condition-case nil
+                                 (funcall on-error "WebSocket close callback failed")
+                               (error nil))))))
+                    (error nil))))))
+          (setf (vox-transport--context-websocket context) ws
+                (vox-transport--context-process context) (websocket-conn ws))
+          (if (vox-transport--live-p context)
+              (progn
+                (setf (vox-session-websocket session) ws)
+                (vox-transport--wrap-process context)
+                ws)
+            (vox-transport--dispose context)
+            nil))
+      (error
+       (vox-transport--fail context "Could not open secure WebSocket; check dependency and endpoint")
+       nil))))
+
+(defun vox-transport--send (session payload opcode)
+  "Send PAYLOAD with OPCODE for SESSION; expose only safe errors."
+  (let ((context (gethash session vox-transport--contexts))
+        (websocket-debug nil) (websocket-callback-debug-on-error nil))
+    (condition-case nil
+        (progn
+          (unless (and context (vox-transport--live-p context)
+                       (vox-transport--context-opened context)
+                       (stringp payload)
+                       (or (eq opcode 'text) (not (multibyte-string-p payload))))
+            (error "Cannot send"))
+          (let ((bytes (if (eq opcode 'text)
+                           (encode-coding-string payload 'utf-8) payload))
+                (ws (vox-transport--context-websocket context))
+                (started (float-time)))
+            (unless (<= (length bytes) vox-transport-max-message-bytes)
+              (error "Message too large"))
+            ;; Upstream send-text uses raw-text, not an explicit UTF-8 encode.
+            ;; Pass pre-encoded octets to make the wire encoding deterministic.
+            (if (eq opcode 'text)
+                (websocket-send-text ws bytes)
+              (websocket-send ws (make-websocket-frame
+                                  :opcode 'binary :payload bytes :completep t)))
+            (when (> (- (float-time) started) vox-transport-send-timeout)
+              (vox-transport--fail context "WebSocket write exceeded time budget")
+              (error "Slow WebSocket write"))
+            t))
+      (error (error "WebSocket send failed")))))
+
+(defun vox-transport-send-text (session text)
+  "Send TEXT as one UTF-8 message for SESSION."
+  (vox-transport--send session text 'text))
+
+(defun vox-transport-send-binary (session bytes)
+  "Send strictly unibyte BYTES as one binary message for SESSION."
+  (vox-transport--send session bytes 'binary))
+
+(defun vox-transport-close (session)
+  "Close SESSION's connection idempotently, without waiting or callbacks.
+Provider finish/completion must precede this resource-reclamation step."
+  (when-let* ((context (gethash session vox-transport--contexts)))
+    (vox-transport--dispose context)))
+
+(provide 'vox-transport)
+;;; vox-transport.el ends here
