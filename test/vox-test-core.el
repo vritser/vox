@@ -66,6 +66,64 @@
       (should-not (vox-session-live-p session (vox-session-generation old-session)))
       (should (equal (vox-session-text session) "")))))
 
+(ert-deftest vox-core-reentrant-chunk-option-preserves-session-owner ()
+  :tags '(vox-unit)
+  (let ((vox--active-session nil) (vox--last-session nil) (vox--generation 0)
+        (vox--backends (copy-hash-table vox--backends))
+        (vox-event-log-enabled nil)
+        inner outer connected closed)
+    (vox-register-backend
+     'synthetic-inner
+     (list :connect (lambda (session _ready _emit _fail) (push session connected))
+           :finish #'ignore :cancel #'ignore
+           :close (lambda (session) (push session closed))))
+    (vox-register-backend
+     'synthetic-outer
+     (list :connect (lambda (session _ready _emit _fail) (push session connected))
+           :finish #'ignore :cancel #'ignore
+           :close (lambda (session) (push session closed))
+           :chunk-ms (lambda ()
+                       (setq inner (vox-core-start 'synthetic-inner nil))
+                       100)))
+    (with-temp-buffer
+      (unwind-protect
+          (progn
+            (should-error (setq outer (vox-core-start 'synthetic-outer nil))
+                          :type 'user-error)
+            (should (eq vox--active-session inner))
+            (should (equal connected (list inner)))
+            (should-not closed)
+            (should (= vox--generation 1))
+            (should (eq (vox-session-state inner) 'connecting))
+            (should (timerp (vox-session-connect-timer inner)))
+            (should-not (vox-session-cleaned inner)))
+        ;; Reclaim both sessions even against the broken implementation.
+        (dolist (session (delq nil (list outer inner)))
+          (setq vox--active-session session)
+          (vox-core-cancel session))))))
+
+(ert-deftest vox-core-custom-backend-configuration-stays-opaque ()
+  :tags '(vox-unit)
+  (let ((vox--active-session nil) (vox--last-session nil) (vox--generation 0)
+        (vox--backends (copy-hash-table vox--backends))
+        (vox-event-log-enabled nil) (vox-log--entries nil)
+        (configuration '(:synthetic-option "opaque backend configuration"))
+        connected)
+    (vox-register-backend
+     'synthetic-configuration
+     (list :configuration configuration
+           :connect (lambda (session _ready _emit _fail) (setq connected session))
+           :finish #'ignore :cancel #'ignore :close #'ignore))
+    (with-temp-buffer
+      (unwind-protect
+          (let ((session (vox-core-start 'synthetic-configuration nil)))
+            (should (eq session connected))
+            (should (eq session (vox-current-session)))
+            (should (equal (vox-session-backend session) configuration))
+            (should (eq (vox-session-state session) 'connecting))
+            (should-not vox-log--entries))
+        (vox-core-cancel)))))
+
 (ert-deftest vox-core-error-never-commits-and-cleans ()
   :tags '(vox-unit)
   (vox-test-session
@@ -329,5 +387,39 @@
           (should (<= (string-width display) 5))
           (should-not (string-match-p "\n" display))
           (should (equal (buffer-string) "")))))))
+
+(ert-deftest vox-core-chunk-option-cannot-retarget-buffer ()
+  :tags '(vox-unit)
+  (let ((vox--active-session nil) (vox--last-session nil) (vox--generation 0)
+        (vox--backends (copy-hash-table vox--backends))
+        (vox-event-log-enabled nil) other session)
+    (vox-register-backend
+     'synthetic-retarget
+     (list :connect #'ignore :finish #'ignore :cancel #'ignore :close #'ignore
+           :chunk-ms (lambda () (set-buffer other) 100)))
+    (with-temp-buffer
+      (setq other (generate-new-buffer " *vox retarget*"))
+      (let ((target (current-buffer)))
+        (unwind-protect
+            (progn
+              (save-current-buffer
+                (setq session (vox-core-start 'synthetic-retarget nil)))
+              (should (eq (vox-session-target-buffer session) target))
+              (should (eq (marker-buffer (vox-session-target-marker session))
+                          target)))
+          (vox-core-cancel)
+          (kill-buffer other))))))
+
+(ert-deftest vox-core-duration-timer-requests-stop ()
+  :tags '(vox-unit)
+  (vox-test-session
+    (funcall ready)
+    (let ((timer (vox-session-duration-timer session)))
+      (should (timerp timer))
+      (apply (timer--function timer) (timer--args timer)))
+    (should (eq (vox-session-state session) 'finalizing))
+    (should (eq (plist-get (vox-session-statistics session) :stop-reason)
+                'duration))
+    (should (= finishes 1))))
 
 (provide 'vox-test-core)

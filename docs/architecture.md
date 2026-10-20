@@ -10,6 +10,7 @@ root; the development layout does not add a runtime dependency or change the API
 | [vox.el](../vox.el) | Public commands, model selection, explicit transcript recovery |
 | [vox-backend.el](../vox-backend.el) | Backend objects/factories, default configuration and model selection data, registration/contracts, JSON helpers, lazy credentials, endpoint validation |
 | [vox-core.el](../vox-core.el) | Session lifecycle, callback generations, transcript reconciliation, PCM queue/chunker, automatic stop requests, completion and cleanup |
+| [vox-log.el](../vox-log.el) | Opt-in bounded event metadata, strict safe-field schema, in-memory snapshots and explicit clearing |
 | [vox-activity.el](../vox-activity.el) | Pure bounded PCM energy analysis, 20 ms windows, speech arming and quiet-duration eligibility; no timers, I/O, or transcript decisions |
 | [vox-device.el](../vox-device.el) | On-demand bounded FFmpeg listings, platform parsers, explicit minibuffer input selection and opt-in persistence |
 | [vox-audio.el](../vox-audio.el) | FFmpeg capture process, binary PCM delivery, stop-to-sentinel handling |
@@ -43,6 +44,14 @@ public commands -> session core -> backend contract -> provider / CLI
   stop path; it is never authoritative completion. Self-recording CLI stays manual.
 - Audio capture supplies binary PCM and a terminal process signal. A stop request
   is not proof that capture ended; core drains before dispatching finish once.
+  One per-session pump owns all sends and finish across reentrant callbacks.
+  Nested capture can queue bytes but cannot start a second send; cancellation
+  cannot block a newer session behind an old session's unwinding pump.
+- Transport consumes incoming callbacks in arrival order, including when pong
+  writes dispatch nested input or terminal process notifications. A close cannot
+  overtake bytes already received. Its retained-input FIFO has separate byte and
+  callback-count limits, in addition to upstream frame/message bounds. Backends
+  must not restore state after a yielding write may have cleaned their session.
 - Sinks own display and insertion. The default sink uses the captured buffer and
   marker, not the callback's current buffer or narrowing boundary. It temporarily
   widens for marker operations and restores the user's restriction and point.
@@ -63,6 +72,16 @@ public commands -> session core -> backend contract -> provider / CLI
   before asynchronous transport opening. Model selection affects future sessions.
 - Loading Vox is silent and does not start capture or connect. Backend registration
   is package setup, not permission to send audio.
+- Event logging is disabled by default. Its input boundary accepts fixed event
+  names/enums and bounded integers only, never raw provider data, text, PCM,
+  credentials or configuration strings. A bounded ring stores memory-only lines;
+  showing it creates a snapshot buffer. Audio progress is sampled by byte count,
+  and cleanup summaries capture per-session totals at teardown. A send returning
+  after reentrant teardown is separately logged with its terminal state.
+- CLI stdout callbacks and terminal notifications share a per-session bounded
+  FIFO. A nested callback cannot overtake earlier lines or overwrite a partial
+  line. Startup rechecks session ownership after callable backend options, before
+  allocating another session.
 
 Use the existing owner before adding a module or wrapper. Keep the public
 `vox-*` API stable when reorganizing tools or tests. Embedding examples and the

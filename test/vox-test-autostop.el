@@ -247,6 +247,55 @@
         (should (string-match-p (if (eq mode 'silence) "pause to finish" "manual stop")
                                 status))))))
 
+(ert-deftest vox-autostop-ui-reports-empty-completion ()
+  :tags '(vox-unit)
+  (vox-autostop-test--session 'silence
+    (let ((noninteractive nil) status
+          (notify (plist-get (vox-make-buffer-sink) :on-state)))
+      (cl-letf (((symbol-function 'message)
+                 (lambda (format-string &rest args)
+                   (setq status (apply #'format format-string args)))))
+        (setf (vox-session-final-text session) "")
+        (funcall notify session 'completed)
+        (should (string-match-p "no speech recognized" status))
+        (setf (vox-session-final-text session) " \n\t")
+        (funcall notify session 'completed)
+        (should (string-match-p "no speech recognized" status))
+        (setf (vox-session-final-text session) "synthetic words")
+        (funcall notify session 'completed)
+        (should (equal status "Vox: completed"))))))
+
+(ert-deftest vox-autostop-ui-empty-completion-keeps-tail-risk ()
+  :tags '(vox-unit)
+  (vox-autostop-test--session 'silence
+    (let ((noninteractive nil) status
+          (notify (plist-get (vox-make-buffer-sink) :on-state)))
+      (cl-letf (((symbol-function 'message)
+                 (lambda (format-string &rest args)
+                   (setq status (apply #'format format-string args)))))
+        (setf (vox-session-final-text session) "")
+        (setf (vox-session-statistics session)
+              (plist-put (vox-session-statistics session) :audio-tail-risk t))
+        (funcall notify session 'completed)
+        (should (string-match-p "no speech recognized" status))
+        (should (string-match-p "tail" status))))))
+
+(ert-deftest vox-autostop-default-delay-is-exactly-sixty-windows ()
+  :tags '(vox-unit)
+  (let ((vox-autostop-test-silence-seconds 1.2))
+    (vox-autostop-test--session 'silence
+      ;; Five 20 ms active windows arm detection; 59 quiet windows are not
+      ;; enough, and the 60th requests exactly one graceful stop.
+      (dotimes (_ 5) (funcall capture (vox-autostop-test--pcm 20 4096)))
+      (dotimes (_ 59) (funcall capture (vox-autostop-test--pcm 20)))
+      (should (= stops 0))
+      (should (eq (vox-session-state session) 'recording))
+      (funcall capture (vox-autostop-test--pcm 20))
+      (should (= stops 1))
+      (should (eq (vox-session-state session) 'draining))
+      (vox-core-stop)
+      (should (= stops 1)))))
+
 (ert-deftest vox-autostop-default-delay-drains-past-one-pump-budget ()
   :tags '(vox-unit)
   (let ((vox-autostop-test-silence-seconds 1.2))

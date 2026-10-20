@@ -59,6 +59,19 @@
     (should (eq (vox-session-state session) 'error))
     (should-not packets) (should (= finishes 0))))
 
+(ert-deftest vox-pcm-odd-tail-logs-recorder-reason ()
+  :tags '(vox-unit)
+  (let ((vox-event-log-enabled t)
+        (vox-log--entries nil))
+    (vox-test-audio
+      (funcall on-bytes (unibyte-string 1))
+      (vox-core-stop)
+      (funcall on-ended)
+      (should (eq (vox-session-state session) 'error))
+      (let ((log (mapconcat #'identity
+                            (reverse (ring-elements vox-log--entries)) "\n")))
+        (should (string-match-p "reason=recorder" log))))))
+
 (ert-deftest vox-pcm-overflow-fails-without-growing ()
   :tags '(vox-unit)
   (vox-test-audio
@@ -96,5 +109,183 @@
     (funcall on-ended) (funcall on-error "late")
     (should (eq (vox-session-state session) 'cancelled))
     (should-not packets)))
+
+(ert-deftest vox-pcm-reentrant-timer-does-not-resend-tail ()
+  :tags '(vox-unit)
+  (vox-test-audio
+    (let ((pcm (concat (make-string (* 9 3200) 42) (unibyte-string 3 4)))
+          timer reentered)
+      (funcall on-bytes pcm)
+      (setq timer (vox-session-audio-timer session))
+      (should (timerp timer))
+      (cancel-timer timer)
+      (setf (vox-session-methods session)
+            (plist-put
+             (vox-session-methods session) :send-pcm
+             (lambda (_session bytes)
+               (when (and (= (length bytes) 2) (not reentered))
+                 (setq reentered t)
+                 (apply (timer--function timer) (timer--args timer)))
+               (push bytes packets))))
+      (vox-core-stop)
+      (funcall on-ended)
+      (should reentered)
+      (should (eq (vox-session-state session) 'finalizing))
+      (should (= finishes 1))
+      (should (eq (car packets) :finish))
+      (should (equal (apply #'concat (reverse (cdr packets))) pcm))
+      (should (= (plist-get (vox-session-statistics session) :sent-bytes)
+                 (length pcm))))))
+
+(ert-deftest vox-pcm-reentrant-capture-serializes-full-frame-sends ()
+  :tags '(vox-unit)
+  (vox-test-audio
+    (let ((first (make-string 3200 17)) (second (make-string 3200 34))
+          reentered (depth 0) (max-depth 0))
+      (setf (vox-session-methods session)
+            (plist-put
+             (vox-session-methods session) :send-pcm
+             (lambda (_session bytes)
+               (cl-incf depth)
+               (setq max-depth (max max-depth depth))
+               (unless reentered
+                 (setq reentered t)
+                 (funcall on-bytes second))
+               (push bytes packets)
+               (cl-decf depth))))
+      (funcall on-bytes first)
+      (should reentered)
+      (should (= max-depth 1))
+      (should (equal (reverse packets) (list first second)))
+      (vox-core-stop)
+      (funcall on-ended)
+      (should (= finishes 1))
+      (should (equal (reverse packets) (list first second :finish))))))
+
+(ert-deftest vox-pcm-reentrant-recorder-end-waits-for-send-return ()
+  :tags '(vox-unit)
+  (vox-test-audio
+    (let (order)
+      (setf (vox-session-methods session)
+            (append
+             (list :send-pcm
+                   (lambda (_session _bytes)
+                     (push :send-start order)
+                     (vox-core-stop)
+                     (funcall on-ended)
+                     (push :send-return order))
+                   :finish (lambda (_session) (push :finish order) (cl-incf finishes)))
+             (vox-session-methods session)))
+      (funcall on-bytes (make-string 3200 12))
+      (should (equal (reverse order) '(:send-start :send-return :finish)))
+      (should (eq (vox-session-state session) 'finalizing))
+      (should (= finishes 1))
+      (should (= (plist-get (vox-session-statistics session) :sent-bytes) 3200)))))
+
+(ert-deftest vox-pcm-reentrant-capture-respects-pump-budget ()
+  :tags '(vox-unit)
+  (vox-test-audio
+    (let ((remaining 10))
+      (setf (vox-session-methods session)
+            (plist-put
+             (vox-session-methods session) :send-pcm
+             (lambda (_session bytes)
+               (when (> remaining 0)
+                 (cl-decf remaining)
+                 (funcall on-bytes (make-string 3200 (- 11 remaining))))
+               (push bytes packets))))
+      (funcall on-bytes (make-string 3200 1))
+      (should (= (length packets) 8))
+      (let ((timer (vox-session-audio-timer session)))
+        (should (timerp timer))
+        (cancel-timer timer)
+        (apply (timer--function timer) (timer--args timer)))
+      (should (= (length packets) 11))
+      (should (equal (reverse packets)
+                     (mapcar (lambda (value) (make-string 3200 value))
+                             (number-sequence 1 11))))
+      (vox-core-stop)
+      (funcall on-ended)
+      (should (= finishes 1))
+      (should (= (plist-get (vox-session-statistics session) :sent-bytes) 35200)))))
+
+(ert-deftest vox-pcm-send-quit-cancels-instead-of-losing-a-frame ()
+  :tags '(vox-unit)
+  (vox-test-audio
+    (let (quit-seen)
+      (setf (vox-session-methods session)
+            (plist-put (vox-session-methods session) :send-pcm
+                       (lambda (_session _bytes) (signal 'quit nil))))
+      (condition-case nil
+          (funcall on-bytes (make-string 3200 7))
+        (quit (setq quit-seen t)))
+      (should quit-seen)
+      (should (eq (vox-session-state session) 'cancelled))
+      (should (vox-session-cleaned session))
+      (should-not (vox-session-audio-pumping session))
+      (should-not (vox-current-session))
+      (should (= finishes 0))
+      (should-not commits))))
+
+(ert-deftest vox-pcm-send-error-releases-pump-ownership ()
+  :tags '(vox-unit)
+  (vox-test-audio
+    (setf (vox-session-methods session)
+          (plist-put (vox-session-methods session) :send-pcm
+                     (lambda (_session _bytes) (error "Synthetic send error"))))
+    (funcall on-bytes (make-string 3200 7))
+    (should (eq (vox-session-state session) 'error))
+    (should (vox-session-cleaned session))
+    (should-not (vox-session-audio-pumping session))
+    (should-not (vox-current-session))
+    (should (= finishes 0))
+    (should-not commits)))
+
+(ert-deftest vox-pcm-reentrant-new-session-has-independent-pump ()
+  :tags '(vox-unit)
+  (vox-test-audio
+    (let ((old session) old-timer new-packets)
+      (funcall on-bytes (make-string (* 9 3200) 5))
+      (setq old-timer (vox-session-audio-timer old))
+      (should (timerp old-timer))
+      (setf (vox-session-methods old)
+            (plist-put
+             (vox-session-methods old) :send-pcm
+             (lambda (_session _bytes)
+               (vox-core-cancel old)
+               (setq session (vox-core-start 'mock nil))
+               (setf (vox-session-methods session)
+                     (append
+                      (list :needs-external-audio t
+                            :send-pcm (lambda (_new bytes) (push bytes new-packets)))
+                      (vox-session-methods session)))
+               (funcall ready)
+               (funcall on-bytes (make-string 3200 9))
+               (apply (timer--function old-timer) (timer--args old-timer)))))
+      (vox--pump old)
+      (should (eq (vox-session-state old) 'cancelled))
+      (should (vox-session-cleaned old))
+      (should-not (vox-session-audio-pumping old))
+      (should-not (vox-session-audio-pumping session))
+      (should (eq (vox-current-session) session))
+      (should (eq (vox-session-state session) 'recording))
+      (should (equal new-packets (list (make-string 3200 9))))
+      (should (= (plist-get (vox-session-statistics session) :sent-bytes) 3200))
+      (should (= finishes 0))
+      (vox-core-stop session)
+      (funcall on-ended)
+      (should (= finishes 1))
+      (should (eq (vox-session-state session) 'finalizing)))))
+
+(ert-deftest vox-pcm-finish-clears-armed-backlog-timer ()
+  :tags '(vox-unit)
+  (vox-test-audio
+    (funcall on-bytes (make-string (* 10 3200) 1))
+    (should (timerp (vox-session-audio-timer session)))
+    (vox-core-stop)
+    (funcall on-ended)
+    (should (eq (vox-session-state session) 'finalizing))
+    (should (= finishes 1))
+    (should-not (vox-session-audio-timer session))))
 
 (provide 'vox-test-core-audio)

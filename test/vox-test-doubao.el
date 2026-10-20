@@ -431,5 +431,56 @@
                                  '(approval key)))))
             (vox-core-cancel)))))))
 
+(ert-deftest vox-doubao-reentrant-send-cancel-keeps-cleanup-final ()
+  :tags '(vox-unit)
+  (dolist (finishing '(nil t))
+    (let* ((vox--last-session nil)
+           (session (vox--make-session
+                     :generation 1 :state 'recording
+                     :methods (list :cancel #'vox-doubao-close :close #'vox-doubao-close)
+                     :backend-state (list :ready t :sequence 2)))
+           (vox--active-session session)
+           sent)
+      (unwind-protect
+          (cl-letf (((symbol-function 'vox-transport-close) #'ignore)
+                    ((symbol-function 'vox-transport-send-binary)
+                     (lambda (_session bytes)
+                       (push bytes sent)
+                       (vox-core-cancel session))))
+            (vox-doubao-send-pcm session (unibyte-string 1 2))
+            (if finishing
+                (vox-doubao-finish session)
+              (vox-doubao-send-pcm session (unibyte-string 3 4)))
+            (should (= (length sent) 1))
+            (should (equal (vox-doubao--gunzip (substring (car sent) 12))
+                           (unibyte-string 1 2)))
+            (should (eq (vox-session-state session) 'cancelled))
+            (should (vox-session-cleaned session))
+            (should-not (vox-session-backend-state session))
+            (should-not (vox-current-session)))
+        (vox-core-cancel session)))))
+
+(ert-deftest vox-doubao-final-callback-failure-does-not-resurrect-state ()
+  :tags '(vox-unit)
+  (let* ((vox--last-session nil)
+         (session (vox--make-session
+                   :generation 1 :state 'finalizing
+                   :methods (list :cancel #'ignore :close #'ignore))))
+    (setf (vox-session-backend-state session)
+          (list :ready t :finished t
+                :on-event (lambda (_event)
+                            (vox-core-fail session "synthetic" 'provider))
+                :on-error #'ignore))
+    (setq vox--active-session session)
+    (cl-letf (((symbol-function 'vox-doubao-decode)
+               (lambda (_payload) (list :last-p t)))
+              ((symbol-function 'vox-doubao-normalize)
+               (lambda (_packet _revision)
+                 '(:type :snapshot :text "synthetic"))))
+      (vox-doubao--message session (unibyte-string 1) 'binary)
+      (should (eq (vox-session-state session) 'error))
+      (should (vox-session-cleaned session))
+      (should-not (vox-session-backend-state session)))))
+
 (provide 'vox-test-doubao)
 ;;; vox-test-doubao.el ends here

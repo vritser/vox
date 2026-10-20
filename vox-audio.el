@@ -125,6 +125,9 @@ All callbacks are generation guarded and errors are contained."
                    (lambda (process _event)
                      (condition-case nil
                          (when (memq (process-status process) '(exit signal failed))
+                           (vox-log-event generation 'audio-exit
+                                          :status (process-status process)
+                                          :exit-code (process-exit-status process))
                            ;; Pending stdout precedes the terminal sentinel.
                            ;; Stop must not detach the filter early.
                            (when (and (not ended)
@@ -153,6 +156,7 @@ All callbacks are generation guarded and errors are contained."
             (process-put recorder 'vox-stderr stderr)
             (process-put recorder 'vox-on-error #'fail)
             (setf (vox-session-recorder session) recorder)
+            (vox-log-event generation 'audio-start)
             recorder)
         (error
          (when (processp stderr) (ignore-errors (delete-process stderr)))
@@ -180,6 +184,7 @@ stop timeout; this function never waits for process output."
                    (> vox-audio-interrupt-retry-delay 0))
         (user-error "Invalid audio interrupt retry delay"))
       (process-put process 'vox-stop-requested t)
+      (vox-log-event generation 'audio-stop)
       (condition-case nil
           (progn
             (vox-audio--interrupt process)
@@ -199,6 +204,7 @@ stop timeout; this function never waits for process output."
                         (setq stats (plist-put stats :audio-interrupt-retries 1)
                               stats (plist-put stats :audio-tail-risk t))
                         (setf (vox-session-statistics session) stats))
+                      (vox-log-event generation 'audio-retry :tail-risk t)
                       (vox-audio--interrupt process))
                   (error
                    (when-let* ((fail (process-get process 'vox-on-error)))
@@ -209,6 +215,8 @@ stop timeout; this function never waits for process output."
   "Discard and reclaim SESSION's recorder, idempotently."
   (let ((process (vox-session-recorder session)))
     (setf (vox-session-recorder session) nil)
+    (when process
+      (vox-log-event (vox-session-generation session) 'audio-cancel))
     (vox-audio--dispose process)))
 
 (provide 'vox-audio)

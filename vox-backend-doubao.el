@@ -199,9 +199,15 @@ not specified.  WebSocket message order supplies local snapshot order."
           (vox-doubao--put session :ready t)
           (funcall (plist-get state :on-ready)))
         (when event (funcall (plist-get state :on-event) event))
-        (when last
-          (vox-doubao--put session :completed t)
-          (funcall (plist-get state :on-event) (list :type :completed))))))))
+        ;; The snapshot callback can fail or cancel the session.  Never
+        ;; recreate adapter state after that cleanup.
+        (let ((current (vox-session-backend-state session)))
+          (when (and last current
+                     (not (vox-session-cleaned session))
+                     (not (plist-get current :closed))
+                     (not (plist-get current :completed)))
+            (vox-doubao--put session :completed t)
+            (funcall (plist-get current :on-event) (list :type :completed)))))))))
 
 (defun vox-doubao--request-id ()
   "Create a UUID-shaped request identifier, without putting secrets in it."
@@ -255,21 +261,24 @@ not specified.  WebSocket message order supplies local snapshot order."
                  (<= (length bytes) 6400) (zerop (% (length bytes) 2)))
       (error "Doubao is not ready for PCM or PCM is invalid"))
     (unless (zerop (length bytes))
-      (when pending
-        (vox-transport-send-binary session (vox-doubao-encode 2 seq pending))
-        (vox-doubao--put session :sequence (1+ seq)))
-      (vox-doubao--put session :pending bytes))))
+      (let ((packet (and pending (vox-doubao-encode 2 seq pending))))
+        ;; Writes can reenter cancellation; never restore PCM after cleanup.
+        (vox-doubao--put session :pending bytes)
+        (when packet
+          (vox-doubao--put session :sequence (1+ seq))
+          (vox-transport-send-binary session packet))))))
 
 (defun vox-doubao-finish (session)
   "Send the retained final PCM packet for SESSION exactly once."
   (let ((state (vox-session-backend-state session)))
     (unless (or (plist-get state :finished) (plist-get state :closed))
       (unless (plist-get state :ready) (error "Doubao is not ready to finish"))
-      (vox-doubao--put session :finished t)
-      (vox-transport-send-binary
-       session (vox-doubao-encode 2 (plist-get state :sequence)
-                                  (or (plist-get state :pending) (unibyte-string)) t))
-      (vox-doubao--put session :pending nil))))
+      (let ((packet (vox-doubao-encode
+                     2 (plist-get state :sequence)
+                     (or (plist-get state :pending) (unibyte-string)) t)))
+        (vox-doubao--put session :finished t)
+        (vox-doubao--put session :pending nil)
+        (vox-transport-send-binary session packet)))))
 
 (defun vox-doubao-close (session)
   "Close SESSION, discarding retained PCM without a success event."

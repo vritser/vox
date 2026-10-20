@@ -10,6 +10,22 @@
   :type '(repeat string) :group 'vox)
 (defcustom vox-cli-max-line-bytes 1048576 "Maximum bytes in one CLI JSON line."
   :type 'integer :group 'vox)
+(defcustom vox-cli-max-retained-input-bytes (* 2 1024 1024)
+  "Maximum bytes in active and queued CLI process callbacks."
+  :type 'integer :group 'vox)
+(defcustom vox-cli-max-retained-input-chunks 1024
+  "Maximum active and queued CLI callbacks, including terminal notifications."
+  :type 'integer :group 'vox)
+
+(cl-defstruct (vox-cli--input (:constructor vox-cli--make-input))
+  queue tail feeding closed (bytes 0) (count 0))
+
+(defun vox-cli--reset-input (input)
+  "Release INPUT's queued callbacks and retained-byte charge."
+  (setf (vox-cli--input-queue input) nil
+        (vox-cli--input-tail input) nil
+        (vox-cli--input-bytes input) 0
+        (vox-cli--input-count input) 0))
 
 (defun vox-cli--dispatch (session line)
   "Parse one UTF-8 LINE and emit a normalized SESSION event."
@@ -39,7 +55,7 @@
       ("error" (funcall (plist-get state :on-error) "CLI reported an error"))
       (_ (error "Unknown CLI event")))))
 
-(defun vox-cli--feed (session bytes)
+(defun vox-cli--consume (session bytes)
   "Accumulate arbitrary byte chunks for SESSION; parse only complete lines."
   (let* ((state (vox-session-backend-state session))
          (pending (or (plist-get state :pending) (unibyte-string)))
@@ -65,6 +81,63 @@
               (plist-put (vox-session-backend-state session) :pending
                          (concat pending (substring bytes start))))))))
 
+(defun vox-cli--receive (session input)
+  "Consume SESSION INPUT in arrival order across reentrant callbacks.
+INPUT is a byte string or a (STATUS . EXIT-CODE) terminal notification.
+Keep each callback's byte charge until its entire input has been consumed."
+  (unless (or (vox-session-cleaned session)
+              (memq (vox-session-state session) '(completed cancelled error))
+              (and (stringp input) (zerop (length input))))
+    (let* ((state (vox-session-backend-state session))
+           (queue (or (plist-get state :input) (vox-cli--make-input)))
+           (size (if (stringp input) (length input) 0))
+           (entry (list input)))
+      (unless (vox-cli--input-closed queue)
+        (when (or (> (+ (vox-cli--input-bytes queue) size)
+                     vox-cli-max-retained-input-bytes)
+                  (>= (vox-cli--input-count queue)
+                      vox-cli-max-retained-input-chunks))
+          (error "CLI retained input exceeds limit"))
+        (setf (vox-session-backend-state session) (plist-put state :input queue))
+        (if (vox-cli--input-tail queue)
+            (setcdr (vox-cli--input-tail queue) entry)
+          (setf (vox-cli--input-queue queue) entry))
+        (setf (vox-cli--input-tail queue) entry)
+        (cl-incf (vox-cli--input-bytes queue) size)
+        (cl-incf (vox-cli--input-count queue))
+        (unless (vox-cli--input-feeding queue)
+          (setf (vox-cli--input-feeding queue) t)
+          (unwind-protect
+              (while (and (not (vox-cli--input-closed queue))
+                          (not (vox-session-cleaned session))
+                          (not (memq (vox-session-state session)
+                                     '(completed cancelled error)))
+                          (vox-cli--input-queue queue))
+                (let ((next (pop (vox-cli--input-queue queue))))
+                  (unless (vox-cli--input-queue queue)
+                    (setf (vox-cli--input-tail queue) nil))
+                  (if (stringp next)
+                      (vox-cli--consume session next)
+                    (let ((current (vox-session-backend-state session)))
+                      (if (and (eq (car next) 'exit) (= (cdr next) 0)
+                               (plist-get current :completed)
+                               (string-empty-p (plist-get current :pending)))
+                          (funcall (plist-get current :on-event) '(:type :completed))
+                        (funcall
+                         (plist-get current :on-error)
+                         "CLI exited without successful explicit completion"))))
+                  (unless (or (vox-cli--input-closed queue)
+                              (vox-session-cleaned session))
+                    (cl-decf (vox-cli--input-count queue))
+                    (cl-decf (vox-cli--input-bytes queue)
+                             (if (stringp next) (length next) 0)))))
+            (setf (vox-cli--input-feeding queue) nil)
+            (vox-cli--reset-input queue)))))))
+
+(defun vox-cli--feed (session bytes)
+  "Queue SESSION BYTES without allowing nested input to overtake them."
+  (vox-cli--receive session bytes))
+
 (defun vox-cli--connect (session on-ready on-event on-error)
   "Launch SESSION CLI with ON-READY, ON-EVENT and ON-ERROR callbacks."
   (unless (and (consp vox-cli-command) (cl-every #'stringp vox-cli-command)
@@ -84,22 +157,31 @@
                :filter (lambda (_process bytes)
                          (when (vox-session-live-p session generation)
                            (condition-case nil (vox-cli--feed session bytes)
+                             (quit (vox-core-cancel session) (signal 'quit nil))
                              (error (funcall on-error "Invalid or oversized CLI output")))))
                :sentinel
                (lambda (process _event)
                  (when (and (vox-session-live-p session generation)
                             (memq (process-status process) '(exit signal failed)))
-                   (let ((state (vox-session-backend-state session)))
-                     (if (and (eq (process-status process) 'exit)
-                              (= (process-exit-status process) 0)
-                              (plist-get state :completed)
-                              (string-empty-p (plist-get state :pending)))
-                         (funcall on-event '(:type :completed))
-                       (funcall on-error "CLI exited without successful explicit completion")))))))
+                   (condition-case nil
+                       (vox-cli--receive session
+                                         (cons (process-status process)
+                                               (process-exit-status process)))
+                     (quit (vox-core-cancel session) (signal 'quit nil))
+                     (error (funcall on-error "Invalid or oversized CLI output")))))))
       (error (when (process-live-p stderr) (delete-process stderr))
-             (error "CLI could not start")))
-    (setf (vox-session-backend-state session)
-          (append (list :process proc :stderr stderr) (vox-session-backend-state session)))))
+             (error "CLI could not start"))
+      (quit
+       (when (processp stderr) (ignore-errors (delete-process stderr)))
+       (signal 'quit nil)))
+    (let ((current (vox-session-backend-state session)))
+      (if (and current (vox-session-live-p session generation))
+          (setf (vox-session-backend-state session)
+                (append (list :process proc :stderr stderr) current))
+        ;; A callback during startup may have cleaned the session before this
+        ;; point; reclaim the processes rather than resurrecting state.
+        (dolist (process (list proc stderr))
+          (when (processp process) (ignore-errors (delete-process process))))))))
 
 (defun vox-cli--finish (session)
   "Request graceful CLI stop for SESSION using an explicit control line."
@@ -111,6 +193,9 @@
 (defun vox-cli--close (session)
   "Terminate SESSION CLI and discard its diagnostics without logging them."
   (let ((state (vox-session-backend-state session)))
+    (when-let* ((input (plist-get state :input)))
+      (setf (vox-cli--input-closed input) t)
+      (vox-cli--reset-input input))
     (dolist (process (list (plist-get state :process) (plist-get state :stderr)))
       (when (and (processp process) (process-live-p process))
         (delete-process process)))))

@@ -232,3 +232,72 @@ without writing extra artifacts.
 Still unverified: actual microphones/OS permission prompts; real provider
 handshakes and final events; live bad-certificate rejection; congested-network
 behavior and ten-minute performance; Emacs 28/29/30 and Linux audio devices.
+
+## Follow-up: reentrant stream ordering, 2026-10-20
+
+This follow-up records **uncommitted work based on `42bbec9`**, not a revision of
+what the earlier 31-test run established. No microphone, real credentials, or
+provider connection was used. See [decision 005](../postmortems/005-reentrant-stream-ordering.md)
+for rationale and the accepted buffering tradeoff.
+
+Deterministic synthetic reproductions exposed these defects:
+
+- A timer reentering the PCM tail send emitted the tail twice and attempted a
+  second transition to finalizing. Reentrant ordinary capture nested sends and
+  bypassed the per-pump work budget. A recorder-ended callback could dispatch
+  finish while an earlier PCM send was still on the stack.
+- A pong write reentering receive processing delivered newer messages before an
+  older callback's unread suffix, or rejected an otherwise valid continuation.
+  A terminal process sentinel could likewise overtake already-received data.
+- Quitting a PCM send left a recording active after dequeuing an uncertain frame;
+  quitting input processing could leave a live connection after abandoning its
+  unread suffix.
+- Doubao's post-write mutations restored PCM/adapter state after cancellation had
+  already cleaned the session. The final-packet path also recreated cleared state.
+
+The regressions failed before their respective fixes. Core now has one
+session-local send/finish owner. Transport queues reentrant input and terminal
+notifications in arrival order, bounded to 2 MiB and 1024 active/queued callbacks
+by default. Empty reads create no entries, and disposal drops pending input.
+Callbacks keep their full byte charge until consumed, so a large coalesced read
+may be rejected even when each contained message is legal. Upstream still owns
+WebSocket parsing and framing. Interrupted I/O terminates safely, and Doubao no
+longer mutates retained state after a yielding write.
+
+Independent review caught a compatibility edge in the FIFO change: the audited
+upstream parser reports protocol CLOSE as one consumed byte. Deferring its native
+terminal callback would let the length/status/reason be parsed as more frames.
+A protocol-close latch now stops wire parsing and permits its terminal callback
+immediately, while queued asynchronous EOF notifications still drain in order.
+Regressions cover empty and valid status-1000/reason CLOSE, immediate/delayed
+sentinels, trailing input, and already-queued EOF without a second notification.
+
+Verification environment: macOS, Emacs **31.1.50**, FFmpeg **7.1.1**.
+
+| Check | Result |
+| --- | --- |
+| `scripts/verify.sh` | PASS: syntax, tooling/runner self-tests, strict temporary-output compilation, dependency checks, complete suite, silent load, whitespace, hygiene |
+| `emacs -Q --batch -l test/vox-test.el` | 263/263 passed; 0 unexpected, 0 skipped |
+| Focused PCM/core regressions | 14/14 passed, including new-session replacement, stale timers, send failure and quit |
+| Focused transport regressions | 40/40 passed using real upstream framing and synthetic pipes |
+| Focused Doubao regressions | 21/21 passed, including cancellation during ordinary and final writes |
+| Consecutive synthetic FFmpeg captures | Positive and negative constant sources each matched all 480 expected PCM16LE samples; stale prior-process callback did not contaminate the next capture |
+| `scripts/benchmark.el` | 600 synthetic seconds, 6000 frames, 19200000 bytes, final commit and cleaned resources; accelerated elapsed 0.258990 s, queue peak 3200 bytes; not a wall-clock capture/network benchmark |
+
+There are 20 added product tests relative to the base commit. These checks prove
+specific ordering, cleanup, and synthetic PCM properties; they do not establish
+that those races caused any particular live recognition result. Actual input
+selection/quality, recognition accuracy, provider timing, the FFmpeg interrupt
+retry's tail risk, and the supported Emacs-version matrix remain separate live
+acceptance work. No VAD threshold, model, language, or sample rate was changed.
+
+## Note: combined diagnostics/CLI tree, 2026-10-20
+
+The 263/263 and 20-test figures in the 005 table above are the 005 baseline; they
+are not the count for the combined 005+006 staged tree. On that combined tree,
+`scripts/verify.sh` passes and `emacs -Q --batch -l test/vox-test.el` runs
+**300/300** product tests with 0 unexpected and 0 skipped. The added coverage
+includes reentrant CLI stdout/terminal ordering, multi-round session isolation,
+bounded event-log fields and buffer safety, empty-recognition diagnostics, and
+the exact 1.2 s silence boundary. These remain offline checks; microphone,
+provider accuracy, and network timing are still separate live acceptance work.

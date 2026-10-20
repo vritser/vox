@@ -15,6 +15,16 @@
 (defcustom vox-transport-max-message-bytes (* 1024 1024)
   "Maximum bytes in one incoming or outgoing WebSocket message."
   :type 'integer :group 'vox-transport)
+(defcustom vox-transport-max-retained-input-bytes (* 2 1024 1024)
+  "Maximum bytes retained by active and queued process-filter callbacks.
+Reentrant input waits for earlier callbacks to finish.  Each callback keeps
+its full byte charge until consumed, even after some frames are dispatched.
+This independent bound can reject a large coalesced read of legal messages."
+  :type 'integer :group 'vox-transport)
+(defcustom vox-transport-max-retained-input-chunks 1024
+  "Maximum active and queued input callbacks, including terminal sentinels.
+Empty process-filter inputs do not consume this budget."
+  :type 'integer :group 'vox-transport)
 (defcustom vox-transport-max-fragments 1024
   "Maximum frames in a fragmented message, including empty frames."
   :type 'integer :group 'vox-transport)
@@ -44,8 +54,9 @@ blocked process-send-string and is not strict network backpressure."
 (declare-function make-websocket-frame "websocket" (&rest args))
 
 (cl-defstruct (vox-transport--context (:constructor vox-transport--make-context))
-  session generation websocket process on-error closed failed opened
-  fragments opcode (size 0) (count 0))
+  session generation websocket process on-error closed failed opened protocol-closed
+  fragments opcode (size 0) (count 0)
+  input-queue input-tail input-feeding (input-bytes 0) (input-count 0))
 
 (defvar vox-transport--contexts (make-hash-table :test #'eq :weakness 'key))
 (defvar vox-transport--opening nil
@@ -65,10 +76,20 @@ blocked process-send-string and is not strict network backpressure."
         (vox-transport--context-size context) 0
         (vox-transport--context-count context) 0))
 
+(defun vox-transport--reset-input (context)
+  "Release queued process input and its retained-byte charge in CONTEXT."
+  (setf (vox-transport--context-input-queue context) nil
+        (vox-transport--context-input-tail context) nil
+        (vox-transport--context-input-bytes context) 0
+        (vox-transport--context-input-count context) 0))
+
 (defun vox-transport--dispose (context)
   "Reclaim CONTEXT's socket without delivering application callbacks."
+  (unless (vox-transport--context-closed context)
+    (vox-log-event (vox-transport--context-generation context) 'transport-close))
   (setf (vox-transport--context-closed context) t)
   (vox-transport--reset-fragments context)
+  (vox-transport--reset-input context)
   (let* ((session (vox-transport--context-session context))
          (ws (vox-transport--context-websocket context))
          (process (vox-transport--context-process context))
@@ -89,6 +110,8 @@ blocked process-send-string and is not strict network backpressure."
 (defun vox-transport--fail (context safe-message)
   "Report fixed SAFE-MESSAGE once for CONTEXT, without raw error data."
   (let ((live (vox-transport--live-p context)))
+    (when live
+      (vox-log-event (vox-transport--context-generation context) 'transport-error))
     (setf (vox-transport--context-failed context) t)
     (vox-transport--dispose context)
     (when live
@@ -140,6 +163,10 @@ implemented here; the upstream handshake function still does all of it."
   "Validate URL and HEADERS without including their contents in errors."
   (unless (and (integerp vox-transport-max-message-bytes)
                (> vox-transport-max-message-bytes 0)
+               (integerp vox-transport-max-retained-input-bytes)
+               (> vox-transport-max-retained-input-bytes 0)
+               (integerp vox-transport-max-retained-input-chunks)
+               (> vox-transport-max-retained-input-chunks 0)
                (integerp vox-transport-max-fragments)
                (> vox-transport-max-fragments 0)
                (numberp vox-transport-send-timeout)
@@ -194,7 +221,55 @@ implemented here; the upstream handshake function still does all of it."
           (error "Invalid UTF-8 text frame"))
         (funcall on-message text kind)))))
 
+(defun vox-transport--queue-input (context input)
+  "Append INPUT to CONTEXT's bounded FIFO.
+INPUT is a wire string or a (SENTINEL . PROCESS) terminal notification;
+raw process-event strings are never retained."
+  (let ((size (+ (vox-transport--context-input-bytes context)
+                 (if (stringp input) (length input) 0)))
+        (count (1+ (vox-transport--context-input-count context)))
+        (entry (list input)))
+    (when (or (> size vox-transport-max-retained-input-bytes)
+              (> count vox-transport-max-retained-input-chunks))
+      (error "WebSocket retained input limit exceeded"))
+    (if (vox-transport--context-input-tail context)
+        (setcdr (vox-transport--context-input-tail context) entry)
+      (setf (vox-transport--context-input-queue context) entry))
+    (setf (vox-transport--context-input-tail context) entry
+          (vox-transport--context-input-bytes context) size
+          (vox-transport--context-input-count context) count)))
+
 (defun vox-transport--feed-input (context filter process bytes)
+  "Queue BYTES for FILTER and PROCESS, preserving CONTEXT's receive order.
+A native write, including an upstream pong reply, can reenter this function.
+The outer callback must consume its whole input before nested input runs."
+  (when (and (vox-transport--live-p context)
+             (not (vox-transport--context-protocol-closed context)))
+    (unless (and (stringp bytes) (not (multibyte-string-p bytes)))
+      (error "WebSocket input must be binary"))
+    (unless (zerop (length bytes))
+      (vox-transport--queue-input context bytes)
+      (unless (vox-transport--context-input-feeding context)
+        (setf (vox-transport--context-input-feeding context) t)
+        (unwind-protect
+            (while (and (vox-transport--live-p context)
+                        (vox-transport--context-input-queue context))
+              (let ((input (pop (vox-transport--context-input-queue context))))
+                (unless (vox-transport--context-input-queue context)
+                  (setf (vox-transport--context-input-tail context) nil))
+                ;; Protocol CLOSE stops byte parsing, not queued EOF delivery.
+                (if (stringp input)
+                    (vox-transport--consume-input context filter process input)
+                  (funcall (car input) (cdr input) "closed"))
+                ;; Disposal may have reset the charge during the callback.
+                (when (vox-transport--live-p context)
+                  (cl-decf (vox-transport--context-input-count context))
+                  (cl-decf (vox-transport--context-input-bytes context)
+                           (if (stringp input) (length input) 0)))))
+          (setf (vox-transport--context-input-feeding context) nil)
+          (vox-transport--reset-input context))))))
+
+(defun vox-transport--consume-input (context filter process bytes)
   "Feed BYTES to upstream FILTER for PROCESS within CONTEXT's wire budget.
 Probe bounded prefixes with the upstream parser, then deliver at most one
 frame per call so application callbacks can close before any later frame.
@@ -205,6 +280,7 @@ HTTP parsing and all WebSocket decoding remain upstream responsibilities."
   (let ((ws (vox-transport--context-websocket context))
         (offset 0))
     (while (and (< offset (length bytes)) (vox-transport--live-p context)
+                (not (vox-transport--context-protocol-closed context))
                 (memq (websocket-ready-state ws) '(connecting open)))
       (let* ((pending (websocket-inflight-input ws))
              (retained (length pending))
@@ -233,6 +309,10 @@ HTTP parsing and all WebSocket decoding remain upstream responsibilities."
                     (when (> (length (websocket-frame-payload frame))
                              (if control 125 vox-transport-max-message-bytes))
                       (error "WebSocket frame limit exceeded"))
+                    (when (eq (websocket-frame-opcode frame) 'close)
+                      ;; Upstream reports CLOSE length as one byte; never parse
+                      ;; its remaining header/reason as another frame.
+                      (setf (vox-transport--context-protocol-closed context) t))
                     (websocket-frame-length frame)))))
           (when boundary
             (setq end (+ offset (- boundary retained))))
@@ -260,13 +340,24 @@ HTTP parsing and all WebSocket decoding remain upstream responsibilities."
          (condition-case nil
              (when (vox-transport--live-p context)
                (vox-transport--feed-input context filter proc bytes))
+           (quit
+            (vox-transport--fail context "WebSocket input interrupted")
+            (signal 'quit nil))
            (error (vox-transport--fail context "WebSocket input rejected or callback failed"))))))
     (set-process-sentinel
      process
      (lambda (proc event)
        (let ((websocket-debug nil) (websocket-callback-debug-on-error nil))
          (condition-case nil
-             (when (vox-transport--live-p context) (funcall sentinel proc event))
+             (when (vox-transport--live-p context)
+               (if (and (vox-transport--context-input-feeding context)
+                        (not (vox-transport--context-protocol-closed context))
+                        (memq (process-status proc) '(closed failed exit signal)))
+                   (vox-transport--queue-input context (cons sentinel proc))
+                 (funcall sentinel proc event)))
+           (quit
+            (vox-transport--fail context "WebSocket connection interrupted")
+            (signal 'quit nil))
            (error (vox-transport--fail context "WebSocket connection failed"))))))))
 
 (defun vox-transport-open (session url headers on-open on-message on-error on-close)
@@ -300,13 +391,15 @@ fixed safe string.  Return the websocket and set SESSION's websocket slot."
                                  (not (vox-transport--context-opened context)))
                         (setf (vox-transport--context-opened context) t
                               (vox-session-websocket session) socket)
+                        (vox-log-event generation 'transport-open)
                         (funcall on-open))
                     (error (vox-transport--fail context "WebSocket open callback failed"))))
                 :on-message
                 (lambda (_socket frame)
                   (condition-case nil
-                      (when (vox-transport--live-p context)
-                        (vox-transport--frame context frame on-message))
+                      (if (vox-transport--live-p context)
+                          (vox-transport--frame context frame on-message)
+                        (vox-log-event generation 'stale-callback))
                     (error (vox-transport--fail context "WebSocket message rejected or callback failed"))))
                 :on-error
                 (lambda (_socket _type _raw-error)

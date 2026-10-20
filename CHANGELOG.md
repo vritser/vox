@@ -4,6 +4,13 @@
 
 ### Added
 
+- **Opt-in event diagnostics:** `vox-toggle-event-log`, `vox-show-event-log` and
+  `vox-clear-event-log` expose bounded, memory-only metadata for comparing
+  recording rounds. Logs distinguish session generations, PCM counts, Qwen VAD
+  activity, stop reasons, empty completion and recorder tail risk, without audio,
+  text, configuration strings or credentials
+  (rationale: [postmortem 006](postmortems/006-session-event-diagnostics.md)).
+
 - **Historical decision records:** the [postmortem record set and template](postmortems/)
   preserve the rationale for silence stopping, explicit device selection, and
   backend/model configuration. Contributor rules cover when to write a record,
@@ -62,6 +69,11 @@
 
 ### Changed
 
+- **Empty-recognition diagnostic:** a successful provider completion with no
+  transcript now reports "no speech recognized" and points at the input device
+  instead of claiming a generic completed status. This distinguishes a silent
+  capture from a second-session state failure; it does not add speech detection.
+
 - **Short-phrase capture by default:** Qwen and Doubao recordings stop gracefully
   after 1.2 seconds of local PCM quiet, once 100 ms of consecutive active windows
   arms detection. Configure `vox-stop-mode`, `vox-silence-seconds`, and
@@ -99,6 +111,33 @@
   permission to push.
 
 ### Fixed
+
+- **Lifecycle cleanup edges:** a failing Doubao final snapshot callback can no
+  longer restore cleared adapter state; CLI startup reclaims its process and
+  stderr pipe if a startup callback cleans the session; a callable `:chunk-ms`
+  cannot retarget the captured buffer or insertion point; and finishing cancels
+  an armed backlog timer. Offline regressions cover each path.
+
+- **Remaining reentrant lifecycle boundaries:** callable backend options can no
+  longer overwrite a session started during configuration. CLI callbacks and
+  terminal notifications are consumed in arrival order, preserving partial
+  lines and completion across nested input, with bounded retained callbacks.
+  Multi-round offline regressions cover completion, cancellation and failure,
+  stale Qwen socket callbacks, reused item IDs and distinct PCM. These findings
+  do not establish the cause of a particular live Qwen recognition error.
+
+- **Reentrant stream ordering:** PCM sends and finish now have one owner per
+  session, preventing nested sends, duplicated tails, premature finish, and
+  work-budget bypass. WebSocket receive callbacks are consumed in arrival order
+  so pong writes cannot reorder messages or invalidate otherwise legal fragments,
+  and terminal notifications cannot overtake already-received bytes. Retained
+  input has independent byte and callback-count bounds; overload and interrupted
+  input processing fail safely. Quitting a PCM send cancels instead of continuing
+  with an uncertain frame. Doubao no longer restores retained PCM after
+  cancellation during a write
+  (rationale: [postmortem 005](postmortems/005-reentrant-stream-ordering.md)).
+  These defects were reproduced offline; a live recognition-accuracy improvement
+  has not been established.
 
 - **Captured positions survive narrowing:** preview measurements and final
   insertion use the real marker, then restore the user's restriction and point.

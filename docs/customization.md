@@ -159,6 +159,16 @@ rejected, not silently replaced. The list is an explicit allowlist, not proof
 that your account can access each model. Configure only models supported by the
 selected provider's realtime protocol.
 
+The Qwen adapter implements **Qwen-ASR-Realtime**, including
+`qwen3-asr-flash-realtime`. The separately documented
+`qwen-audio-3.0-asr-flash-streaming` uses a
+[task-streaming protocol](https://help.aliyun.com/zh/model-studio/qwen-audio-asr-streaming-websocket-api)
+(`run-task`, binary audio, `task-finished`) on `/api-ws/v1/inference`.
+That protocol is not implemented here. Adding its model ID to `:models`, or
+changing only `:endpoint`, does not adapt the wire messages. Use a supported
+Realtime model with this adapter; local mocked tests do not establish model
+compatibility or recognition accuracy.
+
 Both constructors accept a display NAME, `:host`, `:endpoint`, `:models`, and
 `:key`. Hosts are DNS names or IPv4 addresses with an optional port, without a
 scheme or path. Endpoints are absolute paths, optionally with query parameters;
@@ -320,6 +330,13 @@ commits a transcript. Errors retain accepted text for explicit recovery.
   microphone gain and short utterances can affect it. Initial silence does not
   arm it, and an utterance shorter than the arming interval may require manual
   stop. The existing maximum-session duration remains the safety limit.
+- The interval is counted in delivered 20 ms PCM windows, not a wall-clock
+  `run-at-time` timer; a stalled capture cannot advance it. About 100 ms of
+  above-threshold activity (five windows) arms detection. A short noise burst,
+  such as a Bluetooth pop, can arm it, and a following 1.2 s of quiet can stop
+  before you speak; conversely, steady noise above the threshold prevents the
+  quiet interval from accumulating. For noisy input, use manual mode or tune
+  `vox-silence-threshold` and `vox-silence-seconds`.
 - No incoming PCM does not count as silence. Detection consumes actual samples,
   checks the entire input callback, and accounts for new audio received during
   a reentrant send. It cannot foresee audio still buffered outside Emacs.
@@ -334,6 +351,15 @@ Local stopping is separate from `vox-qwen-silence-ms`, which controls server-sid
 VAD segmentation. No provider turn-final or `utterances[].definite` flag is
 reinterpreted as whole-session completion. `:stop-reason` in session statistics
 is `silence` when the local detector requested the stop.
+
+A successful provider completion with no transcript now reports "no speech
+recognized" instead of a generic completed status. That usually means the capture
+delivered silence, not that a later session lost its state. Bluetooth headsets
+are a common cause: the first capture negotiates the HFP microphone profile, and
+an immediate second capture can receive a silent stream while macOS renegotiates.
+Select a wired or USB microphone with `vox-select-input-device`, or reconnect the
+headset before retrying. `vox-show-transcript` still distinguishes confirmed text
+from an unconfirmed hypothesis; it cannot create text the provider did not return.
 
 ### Other interaction limits
 
@@ -363,7 +389,20 @@ is lossless.
 Core slices arbitrary binary process chunks into 100 ms frames (Qwen) or
 100/200 ms frames (Doubao). Its bounded PCM queue fails on overflow without
 silently dropping bytes. Each drain tick does bounded work; no extra sleep is
-added to real-time capture.
+added to real-time capture. Nested callbacks may enqueue audio but cannot send
+another frame or finish until the current send returns. Quitting an in-progress
+PCM send cancels the recording because delivery of that frame is uncertain.
+
+Incoming WebSocket callbacks are consumed in arrival order even when writes
+reenter the event loop. `vox-transport-max-retained-input-bytes` defaults to
+2 MiB; `vox-transport-max-retained-input-chunks` defaults to 1024 active/queued
+callbacks, including deferred terminal process notifications. A close notification
+cannot overtake already-received input. Both limits must be positive integers.
+An active callback retains its full
+byte charge until consumed, even after some frames are dispatched. These limits
+are separate from the 1 MiB message limit and can reject a large coalesced read
+of individually legal messages. Exceeding either bound fails the session rather
+than dropping or reordering input; empty input does not consume queue entries.
 
 Transcript limits also bound metadata: empty-text segments still consume the
 segment-count and ID-byte budgets. Updating an existing ID does not charge it
@@ -419,6 +458,11 @@ is valid only after stop and must be followed by successful process exit;
 nonzero exit, incomplete JSON, or exit without `completed` fails. Arbitrary
 legacy CLIs are not automatically compatible. Lines are bounded by
 `vox-cli-max-line-bytes`; stderr is never parsed as text.
+Reentrant stdout and terminal callbacks are consumed in arrival order.
+`vox-cli-max-retained-input-bytes` (2 MiB) and
+`vox-cli-max-retained-input-chunks` (1024) separately bound active/queued
+callbacks. An oversized coalesced callback can therefore fail even if each
+individual line fits; queued data is discarded on cancellation or failure.
 
 ## Embedding / composer boundary
 
@@ -445,6 +489,55 @@ registers a capability/method plist; see its docstring and the included adapters
 See [Architecture](architecture.md) for ownership boundaries.
 
 ## Troubleshooting
+
+### Event log for repeated recordings
+
+Run `M-x vox-toggle-event-log` before reproducing a problem across two or more
+recordings, then `M-x vox-show-event-log`. The `*Vox events*` buffer is a
+chronological snapshot; run the show command again to refresh it. Each `g=NUMBER`
+identifies one local session, including callbacks rejected from older sessions.
+Use `M-x vox-toggle-event-log` again to disable logging and
+`M-x vox-clear-event-log` to discard retained events and clear the display.
+
+You can also enable it with `(setq vox-event-log-enabled t)`. Logging defaults
+to off, keeps at most `vox-event-log-max-entries` events (1000 by default, capped
+at 10000), and writes no files. Oldest events are evicted when full. Disabling
+logging retains the existing log for inspection; clearing does not disable it.
+Enable before starting the first round to capture the full sequence.
+
+The log records lifecycle events, sampled PCM byte counts, stop reasons,
+FFmpeg exit status/retry risk, recognition event kinds and text lengths. For
+Qwen it also records the fixed server VAD events `speech-start` / `speech-stop`
+and readiness. These map to the documented
+[Qwen server events](https://help.aliyun.com/zh/model-studio/qwen-asr-realtime-server-events).
+It never records PCM, transcripts, provider error messages, item IDs, device
+names, backend/model configuration strings, URLs or credentials.
+
+| Evidence in one generation | What it establishes |
+| --- | --- |
+| `start` without `ready` / `audio-start` | Recording has not reached a ready provider and running recorder; inspect timeout/error events |
+| `cleanup received=0` | Core received no PCM in this round |
+| `audio-receive` / `audio-send` | First block and approximately each second of PCM; `sent` means accepted by the adapter, not confirmed remote delivery |
+| `provider-event kind=speech-start` | Qwen reported speech activity; absence alone does not prove a silent microphone |
+| `finish-dispatch queued=0` | The local queue was drained before requesting provider completion |
+| `complete chars=0` | Authoritative completion yielded no text; this is not proof of stale state or silent audio |
+| `audio-retry tail-risk=t` | FFmpeg needed a second interrupt and tail truncation is possible |
+| `cleanup queued=0 received=... sent=...` | Local cleanup completed; counts at that moment belong only to this generation |
+| `stale-callback` | A callback from a former session was rejected |
+
+Counts cannot establish what was spoken or whether captured audio contains
+speech. `received` counts PCM delivered by the recorder even when a backlog check
+rejected that chunk after receipt; it is not the number admitted to the send
+queue. Repeated-call tests use distinct synthetic PCM and text; microphone,
+provider accuracy and real network timing require separate live acceptance.
+An in-progress adapter send can dispatch cancellation before returning. Its
+later `audio-send state=cancelled` (or another terminal state) records that
+earlier call returning, not a new send after cleanup. The earlier cleanup
+summary cannot include a send that had not yet returned.
+The previous transcript retained for explicit recovery is never input to a new
+session. No connection or provider conversation is reused across recordings.
+
+### Other failures
 
 - Setup failure: check `vox-audio-input`, `executable-find`, installed `websocket`,
   native GnuTLS/zlib, auth-source host/user, key region, and model/resource entitlement.

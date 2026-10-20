@@ -224,5 +224,40 @@
           (should (= interrupts 2))
           (should-not (process-live-p stderr)))))))
 
+(ert-deftest vox-audio-successive-lavfi-captures-preserve-pcm-samples ()
+  :tags '(vox-unit)
+  ;; Synthetic constant signals prove amplitude/endianness, not microphone quality.
+  (skip-unless (executable-find "ffmpeg"))
+  (let (old-filter old-process)
+    (dolist (case '((1 "0.25" 0 32) (2 "-0.25" 0 224)))
+      (let* ((session (vox--make-session :generation (car case) :state 'recording))
+             (vox--active-session session)
+             (vox-audio-program "ffmpeg")
+             (vox-audio-input
+              (list "-f" "lavfi" "-i"
+                    (format "aevalsrc=%s:s=16000:d=0.03" (nth 1 case))))
+             (bytes (unibyte-string)) ended errors process)
+        (unwind-protect
+            (progn
+              (setq process
+                    (vox-audio-start
+                     session (lambda (part) (setq bytes (concat bytes part)))
+                     (lambda () (setq ended t))
+                     (lambda (message) (push message errors))))
+              (when old-filter
+                (funcall old-filter old-process (unibyte-string 255 127)))
+              (setq old-filter (process-filter process) old-process process)
+              (let ((deadline (+ (float-time) 5)))
+                (while (and (not ended) (not errors) (< (float-time) deadline))
+                  (accept-process-output nil 0.05)))
+              (should ended)
+              (should-not errors)
+              (should-not (multibyte-string-p bytes))
+              (should (equal bytes
+                             (apply #'concat
+                                    (make-list 480 (unibyte-string (nth 2 case) (nth 3 case))))))
+              (should-not (vox-session-recorder session)))
+          (vox-audio-cancel session))))))
+
 (provide 'vox-test-audio)
 ;;; vox-test-audio.el ends here

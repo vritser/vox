@@ -344,5 +344,142 @@
                                  '(approval key)))))
             (vox-core-cancel)))))))
 
+(ert-deftest vox-qwen-successive-sessions-isolate-pcm-items-and-old-sockets ()
+  :tags '(vox-unit)
+  (skip-unless (require 'websocket nil t))
+  ;; Synthetic PCM/JSON and local pipes exercise the real transport guards;
+  ;; websocket creation and recording are mocked, with no network or microphone.
+  ;; This verifies Realtime adapter isolation, not live model compatibility.
+  (dolist (terminal '(complete cancel error))
+    (let ((vox--active-session nil) (vox--last-session nil)
+          (vox--generation 0) (vox-event-log-enabled nil)
+          (vox-transport--contexts (make-hash-table :test #'eq))
+          (vox-stop-mode 'manual)
+          (backend (vox-make-qwen
+                    "Synthetic" :models '(qwen3-asr-flash-realtime)
+                    :key "synthetic-key"))
+          (real-message (symbol-function 'vox-qwen--message))
+          sockets sent commits handled first second)
+      (cl-letf (((symbol-function 'vox-transport--check-dependency) #'ignore)
+                ((symbol-function 'vox-qwen--message)
+                 (lambda (session payload opcode)
+                   (push session handled)
+                   (funcall real-message session payload opcode)))
+                ((symbol-function 'websocket-open)
+                 (lambda (url &rest args)
+                   (let ((ws
+                          (websocket-inner-create
+                           :url url
+                           :conn (make-pipe-process
+                                  :name "vox-qwen-test" :buffer nil
+                                  :coding 'binary :noquery t)
+                           :on-open (plist-get args :on-open)
+                           :on-message (plist-get args :on-message)
+                           :on-error (plist-get args :on-error)
+                           :on-close (plist-get args :on-close))))
+                     (push ws sockets)
+                     ws)))
+                ((symbol-function 'vox-transport-send-text)
+                 (lambda (session text)
+                   (push (cons session (vox-json-read text)) sent)))
+                ((symbol-function 'vox-audio-start) (lambda (&rest _) nil))
+                ((symbol-function 'vox-audio-stop) #'vox-core-audio-ended)
+                ((symbol-function 'vox-audio-cancel) #'ignore))
+        (cl-labels
+            ((message-to
+              (socket object)
+              (funcall
+               (websocket-on-message socket) socket
+               (make-websocket-frame
+                :opcode 'text :completep t
+                :payload (encode-coding-string (vox-json-encode object) 'utf-8))))
+             (ready
+              (socket)
+              (funcall (websocket-on-open socket) socket)
+              (message-to socket '(:type "session.updated")))
+             (finish
+              (session socket text)
+              (vox-core-stop session)
+              (message-to
+               socket
+               (list :type "conversation.item.input_audio_transcription.completed"
+                     :item_id "reused-id" :transcript text))
+              (message-to socket '(:type "session.finished")))
+             (audio-for
+              (session)
+              (mapcar
+               (lambda (entry) (base64-decode-string (plist-get (cdr entry) :audio)))
+               (cl-remove-if-not
+                (lambda (entry)
+                  (and (eq (car entry) session)
+                       (equal (plist-get (cdr entry) :type) "input_audio_buffer.append")))
+                (reverse sent)))))
+          (with-temp-buffer
+            (unwind-protect
+                (progn
+                  (setq first (vox-core-start
+                               backend
+                               (list :on-finish
+                                     (lambda (_session text) (push text commits)))
+                               nil nil nil))
+                  (ready (car sockets))
+                  (vox-core-audio first (unibyte-string 1 2 3 4))
+                  ;; A final-item tombstone in A must not suppress B's partial.
+                  (message-to
+                   (car sockets)
+                   '(:type "conversation.item.input_audio_transcription.completed"
+                     :item_id "reused-id" :transcript "first-round"))
+                  (pcase terminal
+                    ('complete (finish first (car sockets) "first-round"))
+                    ('cancel (vox-core-cancel first))
+                    ('error
+                     (funcall (websocket-on-error (car sockets))
+                              (car sockets) 'synthetic "untrusted")))
+                  (should (vox-session-cleaned first))
+                  (should-not (vox-session-backend-state first))
+                  (should (equal (vox-session-audio-pending first) (unibyte-string)))
+                  (setq second (vox-core-start
+                                backend
+                                (list :on-finish
+                                      (lambda (_session text) (push text commits)))
+                                nil nil nil))
+                  (ready (car sockets))
+                  (should (= (length sockets) 2))
+                  (should-not (eq (car sockets) (cadr sockets)))
+                  (should (eq (vox-current-session) second))
+                  (message-to
+                   (car sockets)
+                   '(:type "conversation.item.input_audio_transcription.text"
+                     :item_id "reused-id" :text "second-" :stash "round"))
+                  (should (equal (vox-session-text second) "second-round"))
+                  ;; All retained callbacks of A must be inert while B records.
+                  (let ((before-stale (length handled)))
+                    (message-to
+                     (cadr sockets)
+                     '(:type "conversation.item.input_audio_transcription.completed"
+                       :item_id "reused-id" :transcript "stale-first"))
+                    (funcall (websocket-on-open (cadr sockets)) (cadr sockets))
+                    (funcall (websocket-on-close (cadr sockets)) (cadr sockets))
+                    (funcall (websocket-on-error (cadr sockets))
+                             (cadr sockets) 'synthetic "untrusted")
+                    (should (= (length handled) before-stale)))
+                  (should (eq (vox-session-state second) 'recording))
+                  (should (equal (vox-session-text second) "second-round"))
+                  (should-not (vox-session-backend-state first))
+                  (vox-core-audio second (unibyte-string 5 6 7 8))
+                  (finish second (car sockets) "second-round")
+                  (should (equal (audio-for first)
+                                 (if (eq terminal 'complete)
+                                     (list (unibyte-string 1 2 3 4)) nil)))
+                  (should (equal (audio-for second) (list (unibyte-string 5 6 7 8))))
+                  (should (equal (reverse commits)
+                                 (if (eq terminal 'complete)
+                                     '("first-round" "second-round") '("second-round"))))
+                  (should (eq (vox-session-state second) 'completed))
+                  (should (= (hash-table-count vox-transport--contexts) 0)))
+              (vox-core-cancel)
+              (dolist (socket sockets)
+                (ignore-errors (delete-process (websocket-conn socket)))))))))))
+
 (provide 'vox-test-qwen)
 ;;; vox-test-qwen.el ends here

@@ -70,13 +70,24 @@ Provider errors intentionally omit untrusted messages and parameter echoes."
   "Handle one complete text PAYLOAD with OPCODE for SESSION."
   (unless (plist-get (vox-session-backend-state session) :closed)
     (let* ((state (vox-session-backend-state session))
+           object
            (event (progn
                     (unless (and (eq opcode 'text) (stringp payload)
                                  (<= (string-bytes payload) (* 1024 1024)))
                       (error "Invalid Qwen message frame"))
-                    (vox-qwen-normalize (vox-json-read payload))))
+                    (setq object (vox-json-read payload))
+                    (vox-qwen-normalize object)))
            (kind (plist-get event :type))
            (id (plist-get event :id)))
+      ;; A fixed vocabulary exposes server VAD progress without retaining its
+      ;; raw event type, item IDs, session metadata, or transcription payload.
+      (when-let* ((kind (cdr (assoc (plist-get object :type)
+                                   '(("session.created" . session-created)
+                                     ("session.updated" . ready)
+                                     ("input_audio_buffer.speech_started" . speech-start)
+                                     ("input_audio_buffer.speech_stopped" . speech-stop)
+                                     ("input_audio_buffer.committed" . buffer-committed))))))
+        (vox-log-event (vox-session-generation session) 'provider-event :kind kind))
       (pcase kind
         (:ready
          (unless (plist-get state :ready)
