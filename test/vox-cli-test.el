@@ -51,12 +51,14 @@
                     process (plist-get (vox-session-backend-state session) :process))
               (let ((deadline (+ (float-time) 5)))
                 (while (and (eq (vox-session-state session) 'connecting) (< (float-time) deadline))
-                  (accept-process-output process 0.02)))
+                  (accept-process-output nil 0.02)))
               (should (eq (vox-session-state session) 'recording))
               (vox-core-stop)
+              ;; A dead stdout process alone may not dispatch the final sentinel.
+              ;; Service all process events, including the separate stderr pipe.
               (let ((deadline (+ (float-time) 5)))
                 (while (and (vox--live-p session) (< (float-time) deadline))
-                  (accept-process-output process 0.02)))
+                  (accept-process-output nil 0.02)))
               (should-not (process-live-p process))
               (if (equal exit-code "0")
                   (progn (should (eq (vox-session-state session) 'completed))
