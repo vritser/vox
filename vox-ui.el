@@ -56,10 +56,15 @@ switches windows or sends input to an agent."
          (when (overlayp overlay) (delete-overlay overlay))
          (setq overlay nil))
        (unless noninteractive
-         (if (and (memq state '(finalizing completed))
-                  (plist-get (vox-session-statistics session) :audio-tail-risk))
-             (message "Vox: %s; recorder needed a second interrupt, tail audio may be truncated" state)
-           (message "Vox: %s" state))))
+         (cond
+           ((eq state 'recording)
+            (if (eq (vox-session-stop-mode session) 'silence)
+                (message "Vox: recording; pause to finish, or use vox-stop to end early")
+              (message "Vox: recording (manual stop); use vox-stop or vox-toggle to finish")))
+           ((and (memq state '(finalizing completed))
+                 (plist-get (vox-session-statistics session) :audio-tail-risk))
+            (message "Vox: %s; recorder needed a second interrupt, tail audio may be truncated" state))
+           (t (message "Vox: %s" state)))))
      :on-finish
      (lambda (session text)
        (let ((buffer (vox-session-target-buffer session))

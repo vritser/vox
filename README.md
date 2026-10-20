@@ -33,12 +33,34 @@ packet are verified. A socket close is not successful recognition.
    audio to the provider and may incur charges. An
    [optional CLI backend](docs/customization.md#optional-cli-backend) can instead
    capture its own audio.
-5. In an editable buffer, press `C-c v` to start and again to stop. Wait for
-   authoritative completion before treating the text as final; `C-c C-v`
-   cancels without insertion.
+5. In an editable buffer, press `C-c v` **once**, speak, then pause. For Qwen and
+   Doubao, Vox stops after about 1.2 seconds of quiet audio and inserts only after
+   authoritative completion. Press `C-c v` again to finish early, or `C-c C-v`
+   to cancel without insertion. The self-recording CLI still requires manual stop.
 
 A [use-package example](docs/customization.md#example-configuration) and all
 setup details are in the customization guide.
+
+## Short-phrase and manual modes
+
+The default for Vox-owned capture is short-phrase input:
+
+```elisp
+(setq vox-stop-mode 'silence
+      vox-silence-seconds 1.2)
+```
+
+To record continuously and stop manually, use `(setq vox-stop-mode 'manual)`.
+Both modes insert **once after the whole session finishes**, not once per sentence.
+Settings apply to the next recording. You can always stop early or cancel.
+
+Automatic stopping uses local PCM energy, not delayed recognition text. Initial
+silence alone does not stop recording. Background noise can prevent stopping;
+quiet speech or long pauses can cause early stopping. Adjust the silence duration
+or `vox-silence-threshold`, or choose manual mode. See
+[silence detection](docs/customization.md#short-phrase-silence-detection) for tuning
+and the CLI limitation. Capture shutdown and provider finalization add latency
+after the quiet interval; 1.2 seconds is not a deadline for text insertion.
 
 ## API key configuration
 

@@ -107,6 +107,34 @@ These are local synthetic measurements, not wall-clock capture or network data.
 No live cloud, microphone, credential-store, or multi-version CI test was run;
 this repair makes no new claims about those acceptance boundaries.
 
+## 2026-10-20 short-phrase automatic stop
+
+The default Vox-owned Qwen/Doubao capture path now requests graceful stop after
+local energy silence. `scripts/verify.sh` passed: syntax for 28 Lisp files,
+tooling/runner self-tests, strict compilation of 10 runtime modules, dependency
+checks, the product suite, silent loading, whitespace, and source-tree hygiene.
+A separate full ERT run reported **144 passed, 0 unexpected, 0 skipped** in
+3.273001 seconds on the same local Emacs 31.1.50 environment.
+
+New coverage comprises 19 pure detector tests and 17 lifecycle/UI tests:
+
+- Fixed 20 ms RMS windows, 100 ms arming, exact/rounded quiet thresholds, initial
+  silence, clicks, resumed speech, signed PCM, odd-byte cuts, partial windows,
+  tiny positive thresholds, independent state, and bounded counters/storage.
+- Automatic drain without early insertion, valid capture tails, the default
+  1.2-second interval spanning the eight-frame send budget, and one finish only.
+- Whole-callback analysis and post-send rechecking when sends reenter with new
+  speech, cancellation, or failure; old-session callbacks cannot stop a new one.
+- Manual bypass, explicit self-recording-backend fallback, captured settings,
+  validation before connection, queue overflow before analysis, error recovery,
+  and the effective recording-mode message.
+
+All audio here is synthetic. This is energy detection, not speech classification;
+noise can delay stopping and low-volume speech/pauses can cause early stopping.
+Real microphone threshold calibration, cloud finalization latency, and other
+Emacs versions remain unverified. No actual credential store, microphone, or
+cloud recognizer was accessed for this change.
+
 ## Acceptance boundary
 
 Implemented and locally checked: independent `vox-*` package, asynchronous capture/setup, bounded PCM queue, fragment-safe transport, snapshot/segment replacement, preview-only partials, one final undoable insertion, captured-target ownership, stop/cancel distinction, late-event suppression, credential resolver/endpoint validation, CLI protocol, docs and source release target.

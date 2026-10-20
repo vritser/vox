@@ -28,7 +28,8 @@
   "Start BACKEND (default `vox-backend') using SINK or a buffer sink.
 SINK is a plist of :on-preview, :on-finish, :on-state, :on-error functions.
 It receives the captured session, never the callback's current buffer.
-For a headless session with no sink use `vox-core-start' directly."
+For a headless session with no sink use `vox-core-start' directly.
+Vox-owned recordings stop after silence by default; see `vox-stop-mode'."
   (interactive)
   (when buffer-read-only
     (unless sink (user-error "Vox target buffer is read-only")))
@@ -54,7 +55,7 @@ While connecting, stop cancels instead.  Repeated stops are harmless."
 
 ;;;###autoload
 (defun vox-toggle ()
-  "Start or gracefully stop voice input; report connecting/finalizing status."
+  "Start voice input or stop early; report connecting/finalizing status."
   (interactive)
   (let ((session (vox-current-session)))
     (cond ((not session) (vox-start))

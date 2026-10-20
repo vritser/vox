@@ -5,6 +5,25 @@
 ;; No provider-specific branches or buffer insertion belong in this module.
 ;;; Code:
 (require 'vox-backend)
+(require 'vox-activity)
+
+(defcustom vox-stop-mode 'silence
+  "How recordings stop: `silence' for short phrases or `manual'.
+Silence detection requires Vox-owned PCM capture.  Self-recording backends
+such as CLI use manual stopping.  Changes apply to the next session."
+  :type '(choice (const :tag "Short phrase: stop after silence" silence)
+                 (const :tag "Continuous recording: stop manually" manual))
+  :group 'vox)
+(defcustom vox-silence-seconds 1.2
+  "Quiet PCM seconds before graceful stop, between 0.2 and 10.
+Detection starts only after 100 ms of consecutive above-threshold audio.
+This is an energy heuristic, not speech classification."
+  :type 'number :group 'vox)
+(defcustom vox-silence-threshold 0.01
+  "Normalized RMS threshold for quiet audio, greater than zero and at most 1.
+Lower this for quiet speech; raise it for background noise.  A higher
+threshold can mistake soft speech for silence.  Settings are captured at start."
+  :type 'number :group 'vox)
 
 (defcustom vox-audio-chunk-ms 100 "Default PCM frame duration in milliseconds."
   :type '(choice (const 100) (const 200)) :group 'vox)
@@ -32,7 +51,7 @@
 
 (cl-defstruct (vox-session (:constructor vox--make-session))
   id generation backend methods backend-state state websocket recorder
-  audio-pending audio-timer audio-ended chunk-bytes queue-limit
+  audio-pending audio-timer audio-ended chunk-bytes queue-limit stop-mode activity
   target-buffer target-marker sink segments snapshot snapshot-revision snapshot-final
   (segment-count 0) (segment-id-bytes 0) (segment-text-chars 0)
   preview-text final-text stop-requested finish-sent finish-dispatched committed cleaned
@@ -104,6 +123,7 @@
     (when (markerp (vox-session-target-marker session))
       (set-marker (vox-session-target-marker session) nil))
     (setf (vox-session-audio-pending session) (unibyte-string)
+          (vox-session-activity session) nil
           (vox-session-audio-timer session) nil
           (vox-session-preview-timer session) nil
           (vox-session-connect-timer session) nil
@@ -136,7 +156,8 @@
 A nil SINK is supported for headless callers.  MARKER is copied and follows
 text typed at the original insertion point.  Return the new session."
   (when vox--active-session (user-error "A Vox session is already active"))
-  (unless (and (cl-every (lambda (limit) (and (integerp limit) (> limit 0)))
+  (unless (and (memq vox-stop-mode '(silence manual))
+               (cl-every (lambda (limit) (and (integerp limit) (> limit 0)))
                          (list vox-max-transcript-chars vox-max-segments
                                vox-max-segment-id-bytes vox-max-segment-id-total-bytes))
                (numberp vox-audio-backlog-seconds)
@@ -145,6 +166,11 @@ text typed at the original insertion point.  Return the new session."
                (> vox-max-session-seconds 0) (> vox-preview-interval 0))
     (user-error "Invalid Vox limits"))
   (let* ((methods (copy-sequence (vox-backend-methods backend)))
+         (stop-mode (if (and (eq vox-stop-mode 'silence)
+                             (plist-get methods :needs-external-audio))
+                        'silence 'manual))
+         (activity (when (eq stop-mode 'silence)
+                     (vox-activity-create vox-silence-threshold vox-silence-seconds)))
          (chunk-ms (or (plist-get methods :chunk-ms) vox-audio-chunk-ms))
          (chunk-ms (if (functionp chunk-ms) (funcall chunk-ms) chunk-ms))
          (generation (cl-incf vox--generation))
@@ -152,6 +178,7 @@ text typed at the original insertion point.  Return the new session."
          (session (vox--make-session
                    :id (format "vox-%s-%d" (format-time-string "%s%N") generation)
                    :generation generation :backend backend :methods methods
+                   :stop-mode stop-mode :activity activity
                    :state 'connecting :sink sink :target-buffer target
                    :target-marker (with-current-buffer target (copy-marker (or marker (point)) t))
                    :audio-pending (unibyte-string) :chunk-bytes (* 32 chunk-ms)
@@ -250,7 +277,18 @@ text typed at the original insertion point.  Return the new session."
               (vox-session-statistics session)
               (plist-put (vox-session-statistics session) :queue-peak
                          (max size (plist-get (vox-session-statistics session) :queue-peak))))
-        (vox--pump session)))))
+        (when (and (eq (vox-session-state session) 'recording)
+                   (vox-session-activity session))
+          (vox-activity-feed (vox-session-activity session) bytes))
+        (vox--pump session)
+        ;; Sending can reenter and deliver newer speech; never reuse an old verdict.
+        (when (and (vox--live-p session)
+                   (eq (vox-session-state session) 'recording)
+                   (vox-session-activity session)
+                   (vox-activity-stop-p (vox-session-activity session)))
+          (setf (vox-session-statistics session)
+                (plist-put (vox-session-statistics session) :stop-reason 'silence))
+          (vox-core-stop session))))))
 
 (defun vox-core-audio-ended (session)
   "Observe recorder exit for SESSION before sending its final PCM remainder."

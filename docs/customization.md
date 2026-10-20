@@ -156,6 +156,49 @@ at the captured marker, even outside the currently visible region. Buffer and
 text-property read-only protection remain in force; failed insertion retains
 final text for manual recovery. Vox never presses Return or submits to an agent.
 
+### Short-phrase silence detection
+
+`vox-stop-mode` defaults to `silence` for Vox-owned PCM capture (Qwen and Doubao).
+Press start once, speak, then pause. The detector uses 20 ms PCM16LE windows;
+five consecutive above-threshold windows (100 ms) enable automatic stopping.
+After that, `vox-silence-seconds` of below-threshold audio requests the same
+graceful stop as `vox-stop`: recorder exit, PCM drain, provider finish, then
+**authoritative completion before one insertion**. A quiet interval itself never
+commits a transcript. Errors retain accepted text for explicit recovery.
+
+```elisp
+(setq vox-stop-mode 'silence
+      vox-silence-seconds 1.2
+      vox-silence-threshold 0.01)
+```
+
+- `vox-silence-seconds` accepts 0.2 through 10 seconds, rounded up to 20 ms windows.
+  Increase it, for example to 2.0, if you pause while thinking. Provider response
+  and capture-shutdown time are additional latency, not part of this interval.
+- `vox-silence-threshold` is RMS relative to signed PCM16 full scale (32768),
+  greater than zero and at most 1. The default 0.01 is about -40 dBFS. Lower it for
+  quiet speech; raising it can ignore noise but can also mistake speech for quiet.
+- This is **energy detection, not human-speech classification**. Fans, typing,
+  microphone gain and short utterances can affect it. Initial silence does not
+  arm it, and an utterance shorter than the arming interval may require manual
+  stop. The existing maximum-session duration remains the safety limit.
+- No incoming PCM does not count as silence. Detection consumes actual samples,
+  checks the entire input callback, and accounts for new audio received during
+  a reentrant send. It cannot foresee audio still buffered outside Emacs.
+- Set `vox-stop-mode` to `manual` to bypass analysis entirely and keep recording
+  until `vox-stop`/`vox-toggle` or the duration limit. Mode and thresholds are
+  captured when the session starts. Cancel remains available in either mode.
+- A self-recording backend such as CLI does not supply PCM to Vox, so its effective
+  mode is always manual, shown in the recording status. Text-event arrival gaps
+  are never treated as acoustic silence; the CLI protocol is unchanged.
+
+Local stopping is separate from `vox-qwen-silence-ms`, which controls server-side
+VAD segmentation. No provider turn-final or `utterances[].definite` flag is
+reinterpreted as whole-session completion. `:stop-reason` in session statistics
+is `silence` when the local detector requested the stop.
+
+### Other interaction limits
+
 | Option | Default | Purpose |
 | --- | --- | --- |
 | `vox-preview` | `t` | Enable the transient preview |
@@ -220,7 +263,9 @@ Custom endpoints therefore remain a trust decision.
       vox-cli-command '("/absolute/path/to/your-streaming-asr" "--ndjson"))
 ```
 
-The executable must record its own audio and speak UTF-8 NDJSON v1 on stdout:
+The executable records its own audio, so Vox cannot perform local silence
+detection for this backend. Its recording status explicitly says manual stop;
+use `vox-stop` or `vox-toggle` to finish. It must speak UTF-8 NDJSON v1 on stdout:
 
 ```jsonl
 {"v":1,"type":"started"}

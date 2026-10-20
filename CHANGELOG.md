@@ -20,6 +20,14 @@
 
 ### Changed
 
+- **Short-phrase capture by default:** Qwen and Doubao recordings stop gracefully
+  after 1.2 seconds of local PCM quiet, once 100 ms of consecutive active windows
+  arms detection. Configure `vox-stop-mode`, `vox-silence-seconds`, and
+  `vox-silence-threshold`; manual mode bypasses analysis. The bounded energy
+  detector does not classify human speech, and initial silence does not arm it.
+  Authoritative completion still gates one final insertion. Self-recording CLI
+  remains manual, with the effective mode shown in recording status.
+
 - **Namespaced credential environment:** Qwen reads `VOX_QWEN_API_KEY` and
   Doubao defaults to `VOX_DOUBAO_API_KEY`. The previous environment names have
   no aliases or automatic fallback; `auth-source` remains the first choice.

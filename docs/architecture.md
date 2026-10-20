@@ -9,7 +9,8 @@ root; the development layout does not add a runtime dependency or change the API
 | --- | --- |
 | [vox.el](../vox.el) | Public commands, default backend, explicit transcript recovery |
 | [vox-backend.el](../vox-backend.el) | Backend registration/contracts, JSON helpers, credentials, endpoint validation |
-| [vox-core.el](../vox-core.el) | Session lifecycle, callback generations, transcript reconciliation, PCM queue/chunker, completion and cleanup |
+| [vox-core.el](../vox-core.el) | Session lifecycle, callback generations, transcript reconciliation, PCM queue/chunker, automatic stop requests, completion and cleanup |
+| [vox-activity.el](../vox-activity.el) | Pure bounded PCM energy analysis, 20 ms windows, speech arming and quiet-duration eligibility; no timers, I/O, or transcript decisions |
 | [vox-audio.el](../vox-audio.el) | FFmpeg capture process, binary PCM delivery, stop-to-sentinel handling |
 | [vox-transport.el](../vox-transport.el) | Guarded WebSocket I/O, fragments, message limits, TLS and asynchronous-handshake compatibility |
 | [vox-backend-qwen.el](../vox-backend-qwen.el) | Qwen VAD configuration, provider messages, normalized recognition events |
@@ -34,6 +35,11 @@ public commands -> session core -> backend contract -> provider / CLI
   empty segments do not bypass metadata limits.
 - Backends translate wire events into normalized data. They never insert into
   user buffers. Cloud adapters use the shared transport; the CLI owns its process.
+- Activity analysis retains only bounded numeric state and at most one pending
+  byte, not PCM chunks. Core checks the queue limit first, analyzes a whole PCM
+  callback, then rechecks eligibility after sending to account for reentrant
+  speech/cancellation. A silence verdict only requests the existing graceful
+  stop path; it is never authoritative completion. Self-recording CLI stays manual.
 - Audio capture supplies binary PCM and a terminal process signal. A stop request
   is not proof that capture ended; core drains before dispatching finish once.
 - Sinks own display and insertion. The default sink uses the captured buffer and
