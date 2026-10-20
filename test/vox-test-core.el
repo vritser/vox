@@ -1,28 +1,9 @@
-;;; vox-core-test.el --- Core and sink regressions -*- lexical-binding: t; -*-
-(require 'ert)
-(require 'vox-core)
+;;; vox-test-core.el --- Core and sink regressions -*- lexical-binding: t; no-byte-compile: t; -*-
+(require 'vox-test-support)
 (require 'vox-ui)
 
-(defmacro vox-test-session (&rest body)
-  "Run BODY with a fake backend and captured callbacks."
-  (declare (indent 0) (debug t))
-  `(let ((vox--active-session nil) (vox--last-session nil)
-         (vox--backends (copy-hash-table vox--backends))
-         ready emit fail session (finishes 0) (closes 0) commits states)
-     (vox-register-backend
-      'mock (list :connect (lambda (_s r e f) (setq ready r emit e fail f))
-                  :finish (lambda (_s) (cl-incf finishes))
-                  :cancel #'ignore :close (lambda (_s) (cl-incf closes))))
-     (with-temp-buffer
-       (unwind-protect
-           (progn
-             (setq session (vox-core-start
-                            'mock (list :on-state (lambda (_s state) (push state states))
-                                        :on-finish (lambda (_s text) (push text commits)))))
-             ,@body)
-         (vox-core-cancel)))))
-
 (ert-deftest vox-core-lifecycle-idempotent ()
+  :tags '(vox-unit)
   (vox-test-session
     (should (eq (vox-session-state session) 'connecting))
     (funcall ready)
@@ -40,6 +21,7 @@
     (should-not (vox-session-stop-timer session))))
 
 (ert-deftest vox-core-segment-revisions-order-and-late-partial ()
+  :tags '(vox-unit)
   (vox-test-session
     (funcall ready)
     (dolist (event '((:type :segment-partial :id "b" :text "B" :revision 2)
@@ -52,6 +34,7 @@
     (should (equal (vox-session-text session t) "B!"))))
 
 (ert-deftest vox-core-snapshot-replaces-two-pass-and-deduplicates ()
+  :tags '(vox-unit)
   (vox-test-session
     (funcall ready)
     (funcall emit '(:type :snapshot :text "first" :revision 1))
@@ -63,6 +46,7 @@
     (should (equal commits '("revised whole")))))
 
 (ert-deftest vox-core-cancel-ignores-late-events ()
+  :tags '(vox-unit)
   (vox-test-session
     (funcall ready) (vox-core-cancel) (vox-core-cancel)
     (funcall emit '(:type :segment-final :id "a" :text "late"))
@@ -71,6 +55,7 @@
     (should-not commits) (should (= closes 1))))
 
 (ert-deftest vox-core-old-generation-cannot-touch-new-session ()
+  :tags '(vox-unit)
   (vox-test-session
     (let ((old-emit emit) (old-ready ready) (old-session session))
       (vox-core-cancel)
@@ -82,6 +67,7 @@
       (should (equal (vox-session-text session) "")))))
 
 (ert-deftest vox-core-error-never-commits-and-cleans ()
+  :tags '(vox-unit)
   (vox-test-session
     (funcall ready) (funcall emit '(:type :snapshot :text "unconfirmed"))
     (funcall fail "Safe failure")
@@ -90,12 +76,14 @@
     (should (equal (vox-session-preview-text session) "unconfirmed"))))
 
 (ert-deftest vox-core-premature-completion-errors ()
+  :tags '(vox-unit)
   (vox-test-session
     (funcall ready) (funcall emit '(:type :completed))
     (should (eq (vox-session-state session) 'error))
     (should-not commits)))
 
 (ert-deftest vox-core-killed-target-cancels ()
+  :tags '(vox-unit)
   (vox-test-session
     (vox-core-cancel)
     (let ((target (generate-new-buffer "vox-test-target")))
@@ -106,6 +94,7 @@
       (funcall emit '(:type :completed)) (should-not commits))))
 
 (ert-deftest vox-core-connect-and-stop-timeouts-clean ()
+  :tags '(vox-unit)
   (dolist (phase '(connecting finalizing))
     (vox-test-session
       (when (eq phase 'finalizing) (funcall ready) (vox-core-stop))
@@ -116,6 +105,7 @@
       (should (= closes 1)) (should-not commits))))
 
 (ert-deftest vox-core-sink-exception-is-contained ()
+  :tags '(vox-unit)
   (vox-test-session
     (funcall ready)
     (setf (vox-session-sink session) '(:on-finish (lambda (&rest _) (error "private text"))))
@@ -125,6 +115,7 @@
     (should (= closes 1))))
 
 (ert-deftest vox-core-transcript-limit ()
+  :tags '(vox-unit)
   (vox-test-session
     (funcall ready)
     (let ((vox-max-transcript-chars 3))
@@ -132,6 +123,7 @@
     (should (eq (vox-session-state session) 'error))))
 
 (ert-deftest vox-ui-preview-never-edits-and-finish-undoes-once ()
+  :tags '(vox-unit)
   (vox-test-session
     (buffer-enable-undo)
     (insert "typed")
@@ -155,6 +147,7 @@
       (should (equal (buffer-string) "typed keyboard")))))
 
 (ert-deftest vox-ui-switch-buffer-does-not-redirect-insertion ()
+  :tags '(vox-unit)
   (vox-test-session
     (setf (vox-session-sink session) (vox-make-buffer-sink))
     (let ((target (current-buffer)))
@@ -166,6 +159,7 @@
       (should (equal (with-current-buffer target (buffer-string)) "original")))))
 
 (ert-deftest vox-ui-read-only-preserves-recoverable-final ()
+  :tags '(vox-unit)
   (vox-test-session
     (setf (vox-session-sink session) (vox-make-buffer-sink))
     (funcall ready) (funcall emit '(:type :snapshot :text "recover"))
@@ -176,6 +170,7 @@
     (should (equal (vox-session-final-text session) "recover"))))
 
 (ert-deftest vox-security-endpoints-and-json ()
+  :tags '(vox-unit)
   (should-error (vox-check-endpoint "ws://example.com" '("example.com")))
   (should-error (vox-check-endpoint "wss://user:secret@example.com" '("example.com")))
   (should-error (vox-check-endpoint "wss://evil.test" '("example.com")))
@@ -186,12 +181,14 @@
     (should (eq (plist-get json :falsevalue) :false))))
 
 (ert-deftest vox-security-auth-source-precedes-env ()
+  :tags '(vox-unit)
   (cl-letf (((symbol-function 'auth-source-search)
              (lambda (&rest _) (list (list :secret (lambda () "auth-secret")))))
             ((symbol-function 'getenv) (lambda (_) "env-secret")))
     (should (equal (vox-secret "host" "ENV") "auth-secret"))))
 
 (ert-deftest vox-core-reentrant-finish-commits-once ()
+  :tags '(vox-unit)
   (vox-test-session
     (funcall ready)
     (setf (vox-session-sink session)
@@ -205,6 +202,7 @@
     (should (eq (vox-session-state session) 'completed))))
 
 (ert-deftest vox-core-cancel-discards-transcript ()
+  :tags '(vox-unit)
   (vox-test-session
     (funcall ready)
     (funcall emit '(:type :snapshot :text "private hypothesis"))
@@ -213,6 +211,7 @@
     (should (equal (vox-session-preview-text session) ""))))
 
 (ert-deftest vox-core-finalizing-notification-cannot-complete-before-finish ()
+  :tags '(vox-unit)
   (vox-test-session
     (funcall ready)
     (funcall emit '(:type :segment-partial :id "a" :text "partial"))
@@ -226,6 +225,7 @@
     (should (eq (vox-session-state session) 'error))))
 
 (ert-deftest vox-core-synchronous-backend-completion-supported ()
+  :tags '(vox-unit)
   (vox-test-session
     (funcall ready)
     (setf (vox-session-methods session)
@@ -236,6 +236,7 @@
     (should (eq (vox-session-state session) 'completed))))
 
 (ert-deftest vox-ui-narrow-window-cjk-preview-stays-on-one-line ()
+  :tags '(vox-unit)
   (vox-test-session
     (let* ((sink (vox-make-buffer-sink)) (preview (plist-get sink :on-preview))
            (text (concat (string #x4e2d #x6587 #x1f399) "\nsecond line")))
@@ -251,4 +252,4 @@
           (should-not (string-match-p "\n" display))
           (should (equal (buffer-string) "")))))))
 
-(provide 'vox-core-test)
+(provide 'vox-test-core)

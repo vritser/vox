@@ -1,6 +1,6 @@
-;;; vox-transport-test.el --- Upstream transport tests -*- lexical-binding: t; -*-
+;;; vox-test-transport.el --- Upstream transport tests -*- lexical-binding: t; no-byte-compile: t; -*-
 
-(require 'ert)
+(require 'vox-test-support)
 (require 'cl-lib)
 (require 'vox-transport)
 
@@ -70,6 +70,7 @@
                                                :completep complete) nil))
 
 (ert-deftest vox-transport-nowait-tls-and-debug ()
+  :tags '(vox-unit)
   (vox-transport-test--connection
     (should ws)
     (should asynchronous)
@@ -86,6 +87,7 @@
     (should websocket-debug)))
 
 (ert-deftest vox-transport-shim-leaves-unrelated-sockets-unchanged ()
+  :tags '(vox-unit)
   (let ((pipe (make-pipe-process :name "vox-unrelated" :noquery t)) seen)
     (unwind-protect
         (progn
@@ -95,6 +97,7 @@
       (delete-process pipe))))
 
 (ert-deftest vox-transport-fragmented-utf8-across-octets ()
+  :tags '(vox-unit)
   (vox-transport-test--connection
     (vox-transport-test--upgrade)
     (let* ((text (string #x4e2d #x6587))
@@ -111,6 +114,7 @@
       (should-not errors))))
 
 (ert-deftest vox-transport-binary-split-wire-and-coalesced-messages ()
+  :tags '(vox-unit)
   (vox-transport-test--connection
     (vox-transport-test--upgrade)
     (let* ((bytes (unibyte-string 0 255 128 1))
@@ -124,6 +128,7 @@
     (should-not errors)))
 
 (ert-deftest vox-transport-orphan-continuation-is-safe-error ()
+  :tags '(vox-unit)
   (vox-transport-test--connection
     (vox-transport-test--upgrade)
     (funcall (process-filter socket) socket
@@ -134,6 +139,7 @@
     (should-not (vox-session-websocket session))))
 
 (ert-deftest vox-transport-overlapping-messages-rejected ()
+  :tags '(vox-unit)
   (vox-transport-test--connection
     (vox-transport-test--upgrade)
     (funcall (process-filter socket) socket
@@ -143,6 +149,7 @@
     (should (= (length errors) 1))))
 
 (ert-deftest vox-transport-limits-fragments-and-payload ()
+  :tags '(vox-unit)
   (vox-transport-test--connection
     (vox-transport-test--upgrade)
     (let ((vox-transport-max-message-bytes 3))
@@ -153,6 +160,7 @@
     (should (= (length errors) 1))))
 
 (ert-deftest vox-transport-limits-empty-fragment-count ()
+  :tags '(vox-unit)
   (vox-transport-test--connection
     (vox-transport-test--upgrade)
     (let ((vox-transport-max-fragments 2))
@@ -164,6 +172,7 @@
     (should (= (length errors) 1))))
 
 (ert-deftest vox-transport-limits-upstream-incomplete-wire-buffer ()
+  :tags '(vox-unit)
   (vox-transport-test--connection
     (vox-transport-test--upgrade)
     (let ((vox-transport-max-message-bytes 4)
@@ -174,6 +183,7 @@
     (should (= (length errors) 1))))
 
 (ert-deftest vox-transport-invalid-utf8-rejected ()
+  :tags '(vox-unit)
   (vox-transport-test--connection
     (vox-transport-test--upgrade)
     (funcall (process-filter socket) socket
@@ -182,6 +192,7 @@
     (should (= (length errors) 1))))
 
 (ert-deftest vox-transport-stale-and-duplicate-close-callbacks ()
+  :tags '(vox-unit)
   (vox-transport-test--connection
     (vox-transport-test--upgrade)
     (funcall (websocket-on-close ws) ws)
@@ -193,6 +204,7 @@
     (should-not errors)))
 
 (ert-deftest vox-transport-generation-guard ()
+  :tags '(vox-unit)
   (vox-transport-test--connection
     (setf (vox-session-generation session) 2)
     (funcall (websocket-on-open ws) ws)
@@ -203,6 +215,7 @@
     (should-not closed)))
 
 (ert-deftest vox-transport-rejects-plaintext-and-header-injection ()
+  :tags '(vox-unit)
   (dolist (url '("ws://example.test" "wss://user:secret@example.test"
                  "wss://example.test/#fragment" "wss://example.test/\r\nInjected"))
     (should-error (vox-transport--validate url nil) :type 'user-error))
@@ -210,6 +223,7 @@
                 :type 'user-error))
 
 (ert-deftest vox-transport-sends-text-utf8-and-binary-verbatim ()
+  :tags '(vox-unit)
   (vox-transport-test--connection
     (vox-transport-test--upgrade)
     (setq writes nil)
@@ -225,6 +239,7 @@
       (should-error (vox-transport-send-binary session (string #x4e2d))))))
 
 (ert-deftest vox-transport-safe-send-error ()
+  :tags '(vox-unit)
   (vox-transport-test--connection
     (vox-transport-test--upgrade)
     (cl-letf (((symbol-function 'websocket-send-text)
@@ -233,6 +248,7 @@
         (should (equal (error-message-string err) "WebSocket send failed"))))))
 
 (ert-deftest vox-transport-invalid-handshake-never-opens ()
+  :tags '(vox-unit)
   (vox-transport-test--connection
     (setq network-status 'open)
     (funcall (process-sentinel socket) socket "open")
@@ -244,6 +260,7 @@
     (should-not (vox-session-websocket session))))
 
 (ert-deftest vox-transport-slow-send-fails-after-return ()
+  :tags '(vox-unit)
   (vox-transport-test--connection
     (vox-transport-test--upgrade)
     (let ((clock '(0.0 2.0)) (vox-transport-send-timeout 1.0))
@@ -253,11 +270,13 @@
     (should-not (vox-session-websocket session))))
 
 (ert-deftest vox-transport-unsupported-api-fails-closed ()
+  :tags '(vox-unit)
   (skip-unless (require 'websocket nil t))
   (cl-letf (((symbol-function 'websocket-ensure-handshake) (lambda (_) nil)))
     (should-error (vox-transport--check-dependency) :type 'user-error)))
 
 (ert-deftest vox-transport-message-callback-errors-are-contained ()
+  :tags '(vox-unit)
   (vox-transport-test--connection
     (vox-transport-test--upgrade)
     (cl-letf (((symbol-function 'vox-transport--frame)
@@ -267,5 +286,5 @@
     (should (equal errors '("WebSocket message rejected or callback failed")))
     (should-not (vox-session-websocket session))))
 
-(provide 'vox-transport-test)
-;;; vox-transport-test.el ends here
+(provide 'vox-test-transport)
+;;; vox-test-transport.el ends here

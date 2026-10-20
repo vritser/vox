@@ -38,6 +38,43 @@
 
 These numbers are one local accelerated run, not a wall-clock latency, CPU-utilization, microphone, network, or UI-responsiveness measurement. The benchmark checks exact frame/byte counts, one commit, and cleaned resources. UI scheduling and a real ten-minute recording remain manual acceptance items.
 
+## Repository tooling refresh - 2026-10-20
+
+Environment remains macOS arm64, Emacs 31.1.50 and FFmpeg 7.1.1. The nine runtime
+modules and public commands are unchanged; the package descriptor only gains a
+source-only compilation marker.
+
+- `scripts/setup-deps.sh` verified the pinned cached SHA-256 without network I/O.
+- `scripts/verify.sh` passed from outside the repository (`/tmp`) and through
+  `scripts/package.sh`: 24 Lisp files checked, 11 checker self-tests, 4 runner
+  self-tests, 9 strictly compiled runtime modules, dependency preflight, silent
+  loading, whitespace and source-tree hygiene.
+- Final product suite: **82 expected, 0 unexpected, 0 skipped** (1.328266 seconds).
+- The gate first exposed an intermittent CLI fixture wait stuck in `finalizing`.
+  An isolated run reproduced it. Waiting on all process events instead of only
+  the exited stdout process fixes sentinel dispatch; 10 consecutive isolated
+  runs passed without changing the timeout, assertions, or production code.
+- Fresh package staging builds `dist/vox-0.1.0.tar` without Makefile, old bytecode,
+  local dependencies, or the user's implementation specification. Versions are
+  read from the main header and checked against the descriptor.
+- A real `package-install-file` in a temporary, isolated `package-user-dir`
+  installed the pinned websocket library and Vox, compiled all 9 runtime modules,
+  and loaded `vox` without starting a session. The initial install exposed
+  unwanted recursive compilation of development files. The descriptor, scripts
+  and tests now carry standard `no-byte-compile` markers; the repeat installation
+  has no compile errors or warnings and leaves development files source-only.
+  The isolated installation is removed afterward; the user's Emacs setup is not
+  modified.
+- Current CI invokes the same gate on Emacs 28.1/29.4/30.2; those CI jobs have not
+  been executed here. No microphone, credential store, or cloud endpoint was used.
+- Authorized commit-message normalization retains every original commit tree,
+  author/committer identity and timestamp. Original history is retained on
+  `backup/pre-layout-20261020`; no push was performed.
+
+The new benchmark entry `emacs -Q --batch -l scripts/benchmark.el` processed 6000
+frames / 19,200,000 bytes: elapsed 0.295546 seconds, 21 GCs / 0.170659 GC seconds,
+queue peak 3200 bytes. This is still an accelerated model, not real-time evidence.
+
 ## Acceptance boundary
 
 Implemented and locally checked: independent `vox-*` package, asynchronous capture/setup, bounded PCM queue, fragment-safe transport, snapshot/segment replacement, preview-only partials, one final undoable insertion, captured-target ownership, stop/cancel distinction, late-event suppression, credential resolver/endpoint validation, CLI protocol, docs and source release target.
@@ -48,7 +85,7 @@ Implemented and locally checked: independent `vox-*` package, asynchronous captu
 - Doubao authenticated `bigmodel_async` acceptance of stored-block gzip, microphone stream, empty-audio finish, and authoritative final response. It remains **experimental**.
 - Actual microphone permission/device validation, account region/resource entitlement, wrong-key/network-loss/silence live scenarios.
 - Live TLS bad-certificate/hostname rejection (boot parameters are tested with a mocked native stream).
-- Emacs 28.2/29.4/30.2 runtime results: the CI matrix is provided but has not run locally or on a remote CI service in this session.
+- Emacs 28.1/29.4/30.2 runtime results: the CI matrix is provided but has not run locally or on a remote CI service in this session.
 - Strict socket backpressure or interruption of a blocked native write; the upstream API cannot provide these guarantees.
 - Hard allocation limits inside native gzip decompression.
 

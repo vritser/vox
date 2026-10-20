@@ -1,6 +1,5 @@
-;;; vox-core-audio-test.el --- PCM coordination regressions -*- lexical-binding: t; -*-
-(require 'ert)
-(require 'vox-core-test)
+;;; vox-test-core-audio.el --- PCM coordination regressions -*- lexical-binding: t; no-byte-compile: t; -*-
+(require 'vox-test-support)
 
 (defmacro vox-test-audio (&rest body)
   "Run BODY with deterministic virtual recorder callbacks."
@@ -21,6 +20,7 @@
          ,@body))))
 
 (ert-deftest vox-pcm-arbitrary-cuts-preserve-exact-bytes ()
+  :tags '(vox-unit)
   (dolist (frame '(3200 6400))
     (vox-test-audio
       (setf (vox-session-chunk-bytes session) frame)
@@ -40,6 +40,7 @@
         (should (equal (apply #'concat (reverse (cdr packets))) pcm))))))
 
 (ert-deftest vox-pcm-stop-waits-for-sentinel-and-flushes-tail ()
+  :tags '(vox-unit)
   (vox-test-audio
     (funcall on-bytes (apply #'unibyte-string (make-list 3210 128)))
     (vox-core-stop) (vox-core-stop)
@@ -51,6 +52,7 @@
                           (reverse packets)) '(3200 12 :finish)))))
 
 (ert-deftest vox-pcm-odd-tail-never-sends-half-sample ()
+  :tags '(vox-unit)
   (vox-test-audio
     (funcall on-bytes (unibyte-string 1))
     (vox-core-stop) (funcall on-ended)
@@ -58,6 +60,7 @@
     (should-not packets) (should (= finishes 0))))
 
 (ert-deftest vox-pcm-overflow-fails-without-growing ()
+  :tags '(vox-unit)
   (vox-test-audio
     (funcall on-bytes (make-string 64001 0))
     (should (eq (vox-session-state session) 'error))
@@ -65,6 +68,7 @@
     (should-not packets)))
 
 (ert-deftest vox-pcm-tick-work-is-bounded-and-finishes-after-drain ()
+  :tags '(vox-unit)
   (vox-test-audio
     (funcall on-bytes (make-string 64000 0))
     (should (= (length packets) 8))
@@ -78,12 +82,14 @@
     (should (= (plist-get (vox-session-statistics session) :sent-bytes) 64000))))
 
 (ert-deftest vox-pcm-unexpected-recorder-exit-is-error ()
+  :tags '(vox-unit)
   (vox-test-audio
     (funcall on-ended)
     (should (eq (vox-session-state session) 'error))
     (should (= finishes 0))))
 
 (ert-deftest vox-pcm-stale-recorder-callbacks-ignored ()
+  :tags '(vox-unit)
   (vox-test-audio
     (vox-core-cancel)
     (funcall on-bytes (make-string 3200 0))
@@ -91,4 +97,4 @@
     (should (eq (vox-session-state session) 'cancelled))
     (should-not packets)))
 
-(provide 'vox-core-audio-test)
+(provide 'vox-test-core-audio)

@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: verify (Emacs ${{ matrix.emacs-version }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        emacs-version: ['28.1', '29.4', '30.2']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: purcell/setup-emacs@master
+        with:
+          version: ${{ matrix.emacs-version }}
+      - name: Install virtual-audio dependency
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - name: Prepare audited WebSocket dependency
+        run: scripts/setup-deps.sh
+      - name: Run the shared verification gate
+        run: scripts/verify.sh
+      - name: Run the accelerated PCM benchmark
+        run: emacs -Q --batch -l scripts/benchmark.el
+      - name: Diagnose a failed unit suite
+        if: failure()
+        run: emacs -Q --batch -l test/vox-test.el

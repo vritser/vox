@@ -1,5 +1,5 @@
-;;; vox-doubao-test.el --- SeedASR binary tests -*- lexical-binding: t; -*-
-(require 'ert)
+;;; vox-test-doubao.el --- SeedASR binary tests -*- lexical-binding: t; no-byte-compile: t; -*-
+(require 'vox-test-support)
 (require 'cl-lib)
 (require 'vox-backend-doubao)
 
@@ -22,6 +22,7 @@
             (vox-doubao--uint32 (length bytes)) bytes)))
 
 (ert-deftest vox-doubao-crc-and-gzip-known-vectors ()
+  :tags '(vox-unit)
   (should (= (vox-doubao--crc32 "123456789") #xcbf43926))
   (should (= (vox-doubao--crc32 "") 0))
   (should (equal (vox-doubao-gzip "")
@@ -36,6 +37,7 @@
         (should (equal input (vox-doubao--gunzip gzip)))))))
 
 (ert-deftest vox-doubao-client-wire-header-and-sequence ()
+  :tags '(vox-unit)
   (let ((full (vox-doubao-encode 1 1 "{}"))
         (audio (vox-doubao-encode 2 2 (unibyte-string 128 255)))
         (last (vox-doubao-encode 2 3 (unibyte-string 0 1) t)))
@@ -53,6 +55,7 @@
   (should-error (vox-doubao-gzip (string #x4e2d))))
 
 (ert-deftest vox-doubao-synthetic-fixture-decode ()
+  :tags '(vox-unit)
   (let ((ready (vox-doubao-decode (vox-doubao-test--fixture "doubao-ready.bin")))
         (partial (vox-doubao-decode (vox-doubao-test--fixture "doubao-partial.bin")))
         (final (vox-doubao-decode (vox-doubao-test--fixture "doubao-final.bin"))))
@@ -66,6 +69,7 @@
                    '(:type :snapshot :text "Check Emacs Lisp." :revision 2 :final-p t)))))
 
 (ert-deftest vox-doubao-flags-and-extended-header ()
+  :tags '(vox-unit)
   (dotimes (flags 8)
     (let ((packet (vox-doubao-decode
                    (vox-doubao-test--response flags '(:result (:text "x")) -7 99))))
@@ -78,6 +82,7 @@
     (should (= (plist-get (vox-doubao-decode extended) :sequence) 1))))
 
 (ert-deftest vox-doubao-reject-corrupt-frames ()
+  :tags '(vox-unit)
   (let ((frame (vox-doubao-test--fixture "doubao-final.bin")))
     (dotimes (length (length frame))
       (should-error (vox-doubao-decode (substring frame 0 length))))
@@ -96,6 +101,7 @@
     (should-error (vox-doubao--gunzip gzip))))
 
 (ert-deftest vox-doubao-error-and-body-flags-not-completion ()
+  :tags '(vox-unit)
   (let ((event (vox-doubao-normalize
                 (vox-doubao-decode (vox-doubao-test--fixture "doubao-error.bin")) 1)))
     (should (eq (plist-get event :type) :error))
@@ -107,6 +113,7 @@
     (should-not (plist-get (vox-doubao-normalize packet 1) :final-p))))
 
 (ert-deftest vox-doubao-request-config ()
+  :tags '(vox-unit)
   (let* ((vox-doubao-second-pass nil)
          (request (plist-get (vox-json-read (vox-json-encode (vox-doubao-config))) :request)))
     (should (equal (plist-get request :model_name) "bigmodel"))
@@ -115,6 +122,7 @@
   (should (plist-get (vox-backend-methods 'doubao) :experimental)))
 
 (ert-deftest vox-doubao-connect-ready-held-last-frame-and-complete ()
+  :tags '(vox-unit)
   (let ((session (vox--make-session :id "test" :generation 1))
         callbacks headers sent events errors (ready 0) (closed 0))
     (cl-letf (((symbol-function 'vox-secret) (lambda (&rest _) "test-secret"))
@@ -156,6 +164,7 @@
       (should (= closed 1)))))
 
 (ert-deftest vox-doubao-premature-end-and-disconnect-are-errors ()
+  :tags '(vox-unit)
   (let ((session (vox--make-session :id "test" :generation 1)) callbacks errors events)
     (cl-letf (((symbol-function 'vox-secret) (lambda (&rest _) "test"))
               ((symbol-function 'vox-transport-open)
@@ -169,6 +178,7 @@
     (should-not events)))
 
 (ert-deftest vox-doubao-cancel-discards-pending-and-empty-finish ()
+  :tags '(vox-unit)
   (let ((session (vox--make-session :backend-state '(:ready t :sequence 2))) sent)
     (cl-letf (((symbol-function 'vox-transport-send-binary)
                (lambda (_ bytes) (push bytes sent)))
@@ -185,6 +195,7 @@
       (should (equal (vox-doubao--gunzip (substring (car sent) 12)) "")))))
 
 (ert-deftest vox-doubao-empty-final-payload ()
+  :tags '(vox-unit)
   ;; Both official parsers return before gzip/JSON when payload size is zero.
   (let* ((bytes (unibyte-string #x11 #x93 #x11 0 255 255 255 253 0 0 0 0))
          (packet (vox-doubao-decode bytes))
@@ -197,5 +208,5 @@
     (vox-doubao--message session bytes 'binary)
     (should (equal events '((:type :completed))))))
 
-(provide 'vox-doubao-test)
-;;; vox-doubao-test.el ends here
+(provide 'vox-test-doubao)
+;;; vox-test-doubao.el ends here

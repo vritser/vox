@@ -1,7 +1,6 @@
-;;; vox-cli-test.el --- CLI parser and subprocess integration -*- lexical-binding: t; -*-
-(require 'ert)
+;;; vox-test-cli.el --- CLI parser and subprocess integration -*- lexical-binding: t; no-byte-compile: t; -*-
+(require 'vox-test-support)
 (require 'vox-backend-cli)
-(require 'vox-core-test)
 
 (defconst vox-cli-test--script
   (expand-file-name "support/vox-cli.sh" (file-name-directory (or load-file-name buffer-file-name))))
@@ -17,6 +16,7 @@
        ,@body)))
 
 (ert-deftest vox-cli-split-every-byte-including-utf8 ()
+  :tags '(vox-unit)
   (vox-cli-test-parser
     (let ((bytes (encode-coding-string
                   (concat "{\"v\":1,\"type\":\"started\"}\n"
@@ -29,6 +29,7 @@
     (should (string-empty-p (plist-get (vox-session-backend-state session) :pending)))))
 
 (ert-deftest vox-cli-invalid-lines-and-limits ()
+  :tags '(vox-unit)
   (dolist (bytes '("not json\n" "{\"v\":2,\"type\":\"started\"}\n"
                    "{\"v\":1,\"type\":\"unknown\"}\n"
                    "{\"v\":1,\"type\":\"completed\"}\n"))
@@ -39,6 +40,7 @@
       (should-error (vox-cli--feed session "56789")))))
 
 (ert-deftest vox-cli-real-process-explicit-completion-and-exit ()
+  :tags '(vox-unit)
   (skip-unless (executable-find "sh"))
   (dolist (exit-code '("0" "7"))
     (let ((vox--active-session nil) (vox--last-session nil)
@@ -68,6 +70,7 @@
           (vox-core-cancel))))))
 
 (ert-deftest vox-cli-exit-alone-is-not-completion ()
+  :tags '(vox-unit)
   (skip-unless (executable-find "sh"))
   (let ((vox--active-session nil) (vox--last-session nil)
         (vox-cli-command '("sh" "-c" "exit 0")) session)
@@ -82,7 +85,7 @@
         (vox-core-cancel)))))
 
 (ert-deftest vox-cli-reentrant-cancel-discards-trailing-bytes ()
-  (require 'vox-core-test)
+  :tags '(vox-unit)
   (vox-test-session
     (setf (vox-session-backend-state session)
           (list :on-ready (lambda () (vox-core-cancel session))
@@ -91,4 +94,4 @@
     (should-not (vox-session-backend-state session))
     (should (eq (vox-session-state session) 'cancelled))))
 
-(provide 'vox-cli-test)
+(provide 'vox-test-cli)

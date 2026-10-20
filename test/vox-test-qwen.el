@@ -1,9 +1,10 @@
-;;; vox-qwen-test.el --- Qwen protocol tests -*- lexical-binding: t; -*-
-(require 'ert)
+;;; vox-test-qwen.el --- Qwen protocol tests -*- lexical-binding: t; no-byte-compile: t; -*-
+(require 'vox-test-support)
 (require 'cl-lib)
 (require 'vox-backend-qwen)
 
 (ert-deftest vox-qwen-config-is-vad-pcm ()
+  :tags '(vox-unit)
   (let* ((vox-qwen-language "zh") (vox-qwen-silence-ms 400)
          (object (vox-json-read (vox-json-encode (vox-qwen-session-update "e1"))))
          (session (plist-get object :session)))
@@ -18,6 +19,7 @@
   (let ((vox-qwen-silence-ms 199)) (should-error (vox-qwen-session-update "e"))))
 
 (ert-deftest vox-qwen-pure-normalization-and-replacement ()
+  :tags '(vox-unit)
   (let* ((partial (vox-qwen-normalize
                    '(:type "conversation.item.input_audio_transcription.text"
                      :item_id "a" :text "\u4eca\u5929" :stash "\u5929\u6c14")))
@@ -37,6 +39,7 @@
       (should-not (string-match-p "secret-audio" (prin1-to-string result))))))
 
 (ert-deftest vox-qwen-connect-ready-audio-finish-order ()
+  :tags '(vox-unit)
   (let ((session (vox--make-session :id "test" :generation 1))
         callbacks headers sent events errors (ready 0) (closed 0))
     (cl-letf (((symbol-function 'vox-secret) (lambda (&rest _) "test-secret"))
@@ -73,6 +76,7 @@
       (should (= closed 1)))))
 
 (ert-deftest vox-qwen-late-partial-ignored ()
+  :tags '(vox-unit)
   (let* ((events nil)
          (session (vox--make-session
                    :backend-state
@@ -91,6 +95,7 @@
                    '("ab" "A" "B")))))
 
 (ert-deftest vox-qwen-close-without-authoritative-completion-is-error ()
+  :tags '(vox-unit)
   (let ((session (vox--make-session :id "s" :generation 2)) close errors)
     (cl-letf (((symbol-function 'vox-secret) (lambda (&rest _) "test"))
               ((symbol-function 'vox-transport-open)
@@ -100,6 +105,7 @@
       (should (equal errors '("Qwen connection closed before session.finished"))))))
 
 (ert-deftest vox-qwen-reject-malformed-and-premature-finish ()
+  :tags '(vox-unit)
   (let ((s (vox--make-session :backend-state '(:finished nil))))
     (should-error (vox-qwen--message s "{}" 'binary))
     (should-error (vox-qwen--message s "not json" 'text))
@@ -109,6 +115,7 @@
   (expand-file-name "fixtures" (file-name-directory (or load-file-name buffer-file-name))))
 
 (ert-deftest vox-qwen-official-static-examples ()
+  :tags '(vox-unit)
   (let ((events (with-temp-buffer
                   (insert-file-contents (expand-file-name "qwen-official-events.jsonl"
                                                           vox-qwen-test--fixtures))
@@ -119,5 +126,5 @@
     (should (equal (plist-get (car events) :text) "\u5317\u4eac\u7684"))
     (should (equal (plist-get (cadr events) :text) "\u4eca\u5929\u5929\u6c14\u600e\u4e48\u6837"))))
 
-(provide 'vox-qwen-test)
-;;; vox-qwen-test.el ends here
+(provide 'vox-test-qwen)
+;;; vox-test-qwen.el ends here

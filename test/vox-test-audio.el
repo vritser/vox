@@ -1,6 +1,6 @@
-;;; vox-audio-test.el --- Capture tests -*- lexical-binding: t; -*-
+;;; vox-test-audio.el --- Capture tests -*- lexical-binding: t; no-byte-compile: t; -*-
 
-(require 'ert)
+(require 'vox-test-support)
 (require 'cl-lib)
 (require 'vox-audio)
 
@@ -33,11 +33,13 @@
        (vox-audio-cancel session))))
 
 (ert-deftest vox-audio-requires-explicit-input ()
+  :tags '(vox-unit)
   (let ((vox-audio-input nil))
     (should-error (vox-audio-start (vox--make-session) #'ignore #'ignore #'ignore)
                   :type 'user-error)))
 
 (ert-deftest vox-audio-binary-and-separated-stderr ()
+  :tags '(vox-unit)
   (vox-audio-test--mock
     (let ((bytes (unibyte-string 0 128 255 1)))
       (funcall (process-filter recorder) recorder bytes)
@@ -52,6 +54,7 @@
       (should-not errors))))
 
 (ert-deftest vox-audio-stop-keeps-final-bytes-until-sentinel ()
+  :tags '(vox-unit)
   (vox-audio-test--mock
     (let ((interrupts 0)
           (filter (process-filter recorder))
@@ -73,6 +76,7 @@
       (should-not (process-live-p stderr)))))
 
 (ert-deftest vox-audio-cancel-is-idempotent-and-silent ()
+  :tags '(vox-unit)
   (vox-audio-test--mock
     (vox-audio-cancel session)
     (vox-audio-cancel session)
@@ -83,6 +87,7 @@
     (should-not errors)))
 
 (ert-deftest vox-audio-stale-generation-drops-callbacks ()
+  :tags '(vox-unit)
   (vox-audio-test--mock
     (setf (vox-session-generation session) 2)
     (funcall (process-filter recorder) recorder (unibyte-string 5 6))
@@ -95,6 +100,7 @@
     (should-not (process-live-p stderr))))
 
 (ert-deftest vox-audio-rejects-multibyte-and-redacts-errors ()
+  :tags '(vox-unit)
   (vox-audio-test--mock
     (funcall (process-filter recorder) recorder (string #x4e2d))
     (should-not received)
@@ -102,6 +108,7 @@
     (should-not (process-live-p stderr))))
 
 (ert-deftest vox-audio-callback-errors-do-not-escape ()
+  :tags '(vox-unit)
   (vox-audio-test--mock
     (vox-audio-cancel session)
     (setq recorder
@@ -111,6 +118,7 @@
     (should-not (process-live-p recorder))))
 
 (ert-deftest vox-audio-unexpected-exit-is-safe-error ()
+  :tags '(vox-unit)
   (vox-audio-test--mock
     (cl-letf (((symbol-function 'process-status) (lambda (_) 'exit))
               ((symbol-function 'process-exit-status) (lambda (_) 1)))
@@ -120,6 +128,7 @@
     (should-not ended)))
 
 (ert-deftest vox-audio-lavfi-integration ()
+  :tags '(vox-unit)
   "Use a finite synthetic source, not a microphone or cloud service."
   (skip-unless (executable-find "ffmpeg"))
   (let* ((session (vox--make-session :id "lavfi-test" :generation 1 :state 'recording))
@@ -149,6 +158,7 @@
       (vox-audio-cancel session))))
 
 (ert-deftest vox-audio-retained-callbacks-after-cancel-are-ignored ()
+  :tags '(vox-unit)
   (vox-audio-test--mock
     (let ((filter (process-filter recorder))
           (sentinel (process-sentinel recorder)))
@@ -162,6 +172,7 @@
       (should-not errors))))
 
 (ert-deftest vox-audio-lavfi-asynchronous-stop-integration ()
+  :tags '(vox-unit)
   "Interrupt a running virtual source and await its terminal sentinel."
   (skip-unless (executable-find "ffmpeg"))
   (let* ((session (vox--make-session :id "lavfi-stop" :generation 1 :state 'recording))
@@ -195,6 +206,7 @@
       (vox-audio-cancel session))))
 
 (ert-deftest vox-audio-stop-retry-is-bounded-and-cancel-safe ()
+  :tags '(vox-unit)
   (vox-audio-test--mock
     (let ((interrupts 0))
       (cl-letf (((symbol-function 'interrupt-process) (lambda (&rest _) (cl-incf interrupts))))
@@ -212,5 +224,5 @@
           (should (= interrupts 2))
           (should-not (process-live-p stderr)))))))
 
-(provide 'vox-audio-test)
-;;; vox-audio-test.el ends here
+(provide 'vox-test-audio)
+;;; vox-test-audio.el ends here

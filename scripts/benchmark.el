@@ -1,4 +1,7 @@
-;;; vox-benchmark.el --- Accelerated ten-minute PCM model -*- lexical-binding: t; -*-
+;;; benchmark.el --- Accelerated ten-minute PCM model -*- lexical-binding: t; no-byte-compile: t; -*-
+(add-to-list 'load-path
+             (expand-file-name ".." (file-name-directory (or load-file-name buffer-file-name))))
+(setq load-prefer-newer t)
 (require 'vox-core)
 (require 'benchmark)
 
@@ -38,3 +41,8 @@ This is NOT a ten-minute wall-clock UI, microphone, or network benchmark."
                            (plist-get (vox-session-statistics session) :queue-peak)))
             (princ "No real-time UI responsiveness, network latency, or microphone claims.\n"))
         (vox-core-cancel)))))
+
+(defvar vox-benchmark-no-run nil
+  "Non-nil prevents automatic benchmark execution when loaded in batch.")
+(when (and noninteractive (not vox-benchmark-no-run))
+  (vox-benchmark-run))

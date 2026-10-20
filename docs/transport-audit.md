@@ -182,7 +182,7 @@ are tested. No audio or diagnostics are persisted.
 ```sh
 emacs -Q --batch --eval '(setq load-prefer-newer t)' \
   -L . -L .deps -L test \
-  -l test/vox-audio-test.el -l test/vox-transport-test.el \
+  -l test/vox-test-audio.el -l test/vox-test-transport.el \
   -f ert-run-tests-batch-and-exit
 ```
 
