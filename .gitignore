@@ -4,3 +4,5 @@ dist/
 *.elc
 *~
 .DS_Store
+# Local implementation brief; not part of the package or its docs.
+stream-asr-implementation-spec.md
