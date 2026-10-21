@@ -166,7 +166,7 @@ this construct into your own `mode-line-format'.")
   (when (and color (display-graphic-p)
              (fboundp 'image-type-available-p)
              (image-type-available-p 'svg))
-    (unless (and (imagep vox-ui--mode-line-idle-image)
+    (unless (and vox-ui--mode-line-idle-image
                  (equal color vox-ui--mode-line-idle-color))
       (setq vox-ui--mode-line-idle-image
             (condition-case nil

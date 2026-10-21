@@ -39,7 +39,9 @@ not exit Emacs and is suitable for interactive or coverage-tool use."
 
 (defun vox-test-batch (&optional selector)
   "Run SELECTOR and exit nonzero on failure or empty selection."
-  (condition-case err
+  ;; Emacs 28/29 ERT uses the debugger to record test signals.  Let it
+  ;; handle failures and skips while `debug-on-error' is bound by ERT.
+  (condition-case-unless-debug err
       (let ((stats (vox-test-run selector)))
         (kill-emacs (if (zerop (ert-stats-completed-unexpected stats)) 0 1)))
     (error

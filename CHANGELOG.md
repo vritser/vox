@@ -127,6 +127,12 @@
 
 ### Fixed
 
+- **Mode-line SVG caching:** reuse the image returned by `create-image` while
+  its color is unchanged, without requiring `imagep`. This keeps the icon
+  within the supported Emacs 28.1+ API surface.
+  The batch runner also lets older ERT versions record optional-test skips and
+  failures without aborting the remaining suite.
+
 - **Cross-version verification and stderr isolation:** the strict compile gate
   no longer forces `.el` suffixes for Emacs's own libraries, which recursively
   loaded `jka-compr` on compressed installations. Stderr pipes now detach their

@@ -11,7 +11,9 @@
   (should (= 1 (catch 'exit
                  (cl-letf (((symbol-function 'kill-emacs)
                             (lambda (status) (throw 'exit status))))
-                   (let ((standard-output (generate-new-buffer " *vox-runner-log*")))
+                   ;; Model the batch entry point, outside ERT's debugger.
+                   (let ((debug-on-error nil)
+                         (standard-output (generate-new-buffer " *vox-runner-log*")))
                      (unwind-protect
                          (vox-test-batch '(member vox-deliberately-missing-test))
                        (kill-buffer standard-output))))))))
@@ -44,6 +46,35 @@
   (let ((tests (ert-select-tests '(tag vox-unit) t)))
     (should (> (length tests) 0))
     (should-not (cl-some (lambda (test) (memq 'vox-runner (ert-test-tags test))) tests))))
+
+(ert-deftest vox-runner-completes-after-skips-and-failures ()
+  :tags '(vox-runner)
+  ;; Run synthetic fixtures in a child Emacs: nesting ERT would let the outer
+  ;; test's debugger mask the batch runner's handling of ERT signals.
+  (let ((emacs (expand-file-name invocation-name invocation-directory)))
+    (dolist (scenario '((skip-unless 0) (should 1)))
+      (with-temp-buffer
+        (should
+         (= (cadr scenario)
+            (call-process
+             emacs nil t nil "-Q" "--batch" "-L" vox-test-directory
+             "--eval"
+             (prin1-to-string
+              `(progn
+                 (setq vox-test-no-run t)
+                 (require 'vox-test)
+                 (ert-deftest vox-runner-fixture-a ()
+                   (,(car scenario) nil))
+                 (ert-deftest vox-runner-fixture-z ()
+                   (princ "vox-runner-reached-final-fixture\n")
+                   (should t))
+                 (vox-test-batch
+                  '(member vox-runner-fixture-a vox-runner-fixture-z)))))))
+        (should (string-match-p "vox-runner-reached-final-fixture"
+                                (buffer-string)))
+        (should (string-match-p (if (eq (car scenario) 'skip-unless)
+                                   "SKIPPED" "FAILED")
+                                (buffer-string)))))))
 
 (ert-deftest vox-runner-subsystem-load-is-independent ()
   :tags '(vox-runner)
