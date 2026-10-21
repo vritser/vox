@@ -436,4 +436,115 @@
                     (buffer-list))))
       (delete-process process))))
 
+(ert-deftest vox-ui-mode-line-is-global-and-clickable ()
+  :tags '(vox-unit)
+  (should (member vox-mode-line-construct global-mode-string))
+  (should (keymapp vox-ui--mode-line-map))
+  (should (eq (lookup-key vox-ui--mode-line-map [mode-line mouse-1])
+              'vox-toggle))
+  (let* ((vox--active-session nil)
+         (vox-mode-line t)
+         (text (vox-ui--mode-line-text)))
+    (should (stringp text))
+    (should (eq (get-text-property 0 'local-map text)
+                vox-ui--mode-line-map))
+    (should (string-match-p "start recording"
+                            (get-text-property 0 'help-echo text)))))
+
+(ert-deftest vox-ui-mode-line-appends-once-to-global-mode-string ()
+  :tags '(vox-unit)
+  (let ((global-mode-string '("other")))
+    (unwind-protect
+        (progn
+          (vox-ui--mode-line-place)
+          (vox-ui--mode-line-place)
+          (should (equal global-mode-string
+                         '("other" (:eval (vox-ui--mode-line-text))))))
+      (setq global-mode-string nil)
+      (vox-ui--mode-line-place))))
+
+(ert-deftest vox-ui-mode-line-can-be-disabled ()
+  :tags '(vox-unit)
+  (let ((vox-mode-line nil)
+        (vox--active-session nil))
+    (should (equal (vox-ui--mode-line-text) ""))))
+
+(ert-deftest vox-ui-mode-line-svg-has-microphone-and-waves ()
+  :tags '(vox-unit)
+  (let ((frames (mapcar (lambda (phase)
+                          (vox-ui--mode-line-svg phase "#ff0000"))
+                        '(0 1 2 3))))
+    (should (= 4 (length frames)))
+    (dolist (svg frames)
+      (should (string-match-p "<rect " svg))
+      (should (string-match-p "<path " svg))
+      (should (string-match-p "#ff0000" svg)))
+    (should (string-match-p "opacity=\"1.0\"" (nth 0 frames)))
+    (should-not (equal (nth 0 frames) (nth 1 frames)))))
+
+(ert-deftest vox-ui-mode-line-idle-falls-back-without-svg ()
+  :tags '(vox-unit)
+  (let ((vox-mode-line-icon "MIC")
+        (vox--active-session nil)
+        (vox-mode-line t))
+    (cl-letf (((symbol-function 'display-graphic-p)
+               (lambda (&optional _) nil)))
+      (should (equal (substring-no-properties (vox-ui--mode-line-text))
+                     "MIC")))))
+
+(ert-deftest vox-ui-mode-line-shows-active-outside-target ()
+  :tags '(vox-unit)
+  (let* ((target (generate-new-buffer " *vox-mode-line-target*"))
+         (session (vox--make-session :generation 1 :state 'recording
+                                      :target-buffer target))
+         (vox--active-session session)
+         (vox-mode-line t))
+    (unwind-protect
+        (let ((text (vox-ui--mode-line-text)))
+          (should (stringp text))
+          (should (string-match-p "recording"
+                                  (get-text-property 0 'help-echo text)))
+          (should (eq (get-text-property 0 'local-map text)
+                      vox-ui--mode-line-map)))
+      (kill-buffer target))))
+
+(ert-deftest vox-ui-mode-line-animates-in-target ()
+  :tags '(vox-unit)
+  (skip-unless (require 'motion-line nil t))
+  (let* ((target (generate-new-buffer " *vox-mode-line-target*"))
+         (session (vox--make-session :generation 1 :state 'recording
+                                      :target-buffer target))
+         (vox--active-session session)
+         (vox-ui--mode-line-images nil)
+         (vox-ui--mode-line-images-color nil)
+         (vox-mode-line t)
+         (created 0))
+    (unwind-protect
+        (cl-letf (((symbol-function 'display-graphic-p)
+                   (lambda (&optional _) t))
+                  ((symbol-function 'image-type-available-p) (lambda (_) t))
+                  ((symbol-function 'face-foreground)
+                   (lambda (&rest _) "#ff0000"))
+                  ((symbol-function 'color-values) (lambda (_) '(65535 0 0)))
+                  ((symbol-function 'create-image)
+                   (lambda (_data &rest _)
+                     (intern (format "vox-wave-%d" (cl-incf created))))))
+          (vox-ui--mode-line-update session 'recording)
+          (with-current-buffer target
+            (should (motion-line-playing-p 'vox-mode-line))
+            (let ((text (vox-ui--mode-line-text)))
+              (should (get-text-property 0 'display text))
+              (should (eq (get-text-property 0 'local-map text)
+                          vox-ui--mode-line-map))))
+          (with-temp-buffer
+            (let ((text (vox-ui--mode-line-text)))
+              (should (string-match-p "recording"
+                                      (get-text-property 0 'help-echo text))))))
+      (vox-ui--mode-line-update session 'completed)
+      (with-current-buffer target
+        (should-not (motion-line-playing-p 'vox-mode-line)))
+      (setq vox-ui--mode-line-images nil
+            vox-ui--mode-line-images-color nil)
+      (kill-buffer target))))
+
 (provide 'vox-test-core)

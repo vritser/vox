@@ -4,6 +4,16 @@
 
 ### Added
 
+- **Clickable mode-line icon:** a persistent microphone icon at the end of the
+  mode line starts or stops recording with a mouse click. Vox appends
+  `vox-mode-line-construct` to `global-mode-string`; insert that construct into
+  your own `mode-line-format` to place the icon elsewhere. While connecting,
+  recording, draining, or finalizing, the target buffer's icon pulses four
+  sound-wave phases; other buffers show a static active icon. Animation uses the
+  optional `motion-line` package; a one-cell glyph is the fallback. The icon
+  inherits the state face color. Customize `vox-mode-line` and
+  `vox-mode-line-icon`.
+
 - **Opt-in event diagnostics:** `vox-toggle-event-log`, `vox-show-event-log` and
   `vox-clear-event-log` expose bounded, memory-only metadata for comparing
   recording rounds. Logs distinguish session generations, PCM counts, Qwen VAD

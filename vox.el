@@ -58,7 +58,9 @@ nil.  Programmatic calls require explicit input configuration and do not prompt.
           (with-current-buffer target
             (when (and buffer-read-only (not sink))
               (user-error "Vox target buffer is read-only"))
-            (vox-core-start selected-backend (or sink (vox-make-buffer-sink))
+            (vox-core-start selected-backend
+                            (vox-ui--instrument-sink
+                             (or sink (vox-make-buffer-sink)))
                             target marker selected-model)))
       (set-marker marker nil))))
 

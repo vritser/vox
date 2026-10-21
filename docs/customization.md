@@ -304,6 +304,33 @@ at the captured marker, even outside the currently visible region. Buffer and
 text-property read-only protection remain in force; failed insertion retains
 final text for manual recovery. Vox never presses Return or submits to an agent.
 
+A persistent microphone icon is appended to `global-mode-string`, so it sits at
+the end of the mode line. Clicking it starts or stops recording. While a
+session is connecting, recording, draining, or finalizing, the target buffer's
+icon animates four sound-wave phases pulsing outward on both sides; other
+buffers show a static active icon. Animation uses the optional `motion-line`
+package; without it, a one-cell glyph is shown. The icon inherits the state face
+color. Set `vox-mode-line` to nil to hide it; `vox-mode-line-icon` changes the
+fallback glyph.
+
+To place the icon somewhere else, remove `vox-mode-line-construct` from
+`global-mode-string` and insert it into your own `mode-line-format`.  For the
+default mode line, this puts it at the front:
+
+```elisp
+(with-eval-after-load 'vox
+  (setq global-mode-string
+        (remove vox-mode-line-construct global-mode-string))
+  (setq-default mode-line-format
+                (cons vox-mode-line-construct
+                      (default-value 'mode-line-format))))
+```
+
+`doom-modeline` already renders `global-mode-string` in its right-hand misc
+segment, so the default end placement works there without extra setup.  To put
+the icon somewhere else in `doom-modeline`, register the construct through its
+own segment or layout API instead of editing `mode-line-format`.
+
 ### Short-phrase silence detection
 
 `vox-stop-mode` defaults to `silence` for Vox-owned PCM capture (Qwen and Doubao).
