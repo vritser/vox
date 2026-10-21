@@ -141,6 +141,12 @@
 
 ### Fixed
 
+- **Inline recognition and cursor placement:** previews no longer add square
+  brackets or a leading space. After final insertion, point follows the text
+  when it is still at the captured insertion marker; a point moved elsewhere
+  stays there. Preview remains transient and final insertion remains one undo
+  step.
+
 - **Doubao metadata-only ready response:** a successful `bigmodel_async` full
   response may contain only `result.additions` metadata (for example `log_id`)
   and no `text`. Vox now treats it as readiness and emits no snapshot instead of

@@ -299,13 +299,14 @@ this construct into your own `mode-line-format'.")
          (width (max 0 vox-preview-width)))
     (dolist (window (get-buffer-window-list buffer nil t))
       (setq width (min width (max 0 (- (window-body-width window)
-                                      (- column (window-hscroll window)) 4)))))
+                                      (- column (window-hscroll window)) 1)))))
     width))
 
 (defun vox-make-buffer-sink ()
   "Return a sink using the session's captured buffer and insertion marker.
-Typing at that marker moves it after typed text.  Neither preview nor commit
-switches windows or sends input to an agent."
+Typing at that marker moves it after typed text.  Point follows committed text
+only when still at that marker.  Neither preview nor commit switches windows
+or sends input to an agent."
   (let (overlay)
     (list
      :on-preview
@@ -322,9 +323,9 @@ switches windows or sends input to an agent."
            (overlay-put overlay 'after-string
                         (when (> width 0)
                           (propertize
-                           (concat " [" (truncate-string-to-width
-                                          (replace-regexp-in-string "[\n\r\t]+" " " text)
-                                          width nil nil (when (>= width 3) "...")) "]")
+                           (truncate-string-to-width
+                            (replace-regexp-in-string "[\n\r\t]+" " " text)
+                            width nil nil (when (>= width 3) "..."))
                            'face 'shadow))))))
      :on-state
      (lambda (session state)
@@ -356,14 +357,17 @@ switches windows or sends input to an agent."
            (error "Vox target no longer exists"))
          (with-current-buffer buffer
            (when buffer-read-only (error "Vox target is read-only"))
-           (save-excursion
-             (save-restriction
-               ;; A restriction can otherwise clamp the captured marker silently.
-               (widen)
-               (goto-char marker)
-               (undo-boundary)
-               (atomic-change-group (insert text))
-               (undo-boundary))))))
+           (let ((follow-point (= (point) marker)))
+             (save-excursion
+               (save-restriction
+                 ;; A restriction can otherwise clamp the captured marker silently.
+                 (widen)
+                 (goto-char marker)
+                 (undo-boundary)
+                 (atomic-change-group (insert text))
+                 (undo-boundary)))
+             ;; The insertion-type marker follows text; save-excursion does not.
+             (when follow-point (goto-char marker))))))
      :on-error
      (lambda (_session _error)
        (unless noninteractive

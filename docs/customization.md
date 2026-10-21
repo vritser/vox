@@ -340,13 +340,16 @@ and authoritative final response remain live integration checks.
   kill ring and possibly the system clipboard.
 - `vox-forget-transcript` forgets the last session and removes the recovery buffer.
 
-Preview is a throttled one-line overlay, not buffer text. Typing at the captured
-insertion point moves its marker **after** your typing. Successful final text
-inserts once at that marker with an undo boundary. Switching buffers does not
-redirect insertion; killing the original buffer cancels. If you narrow the buffer
-during recording, Vox temporarily widens for marker-based preview measurements
-and final insertion, then restores the restriction and point. Text still lands
-at the captured marker, even outside the currently visible region. Buffer and
+Preview is a throttled one-line overlay in the shadow face, without added brackets
+or spacing, not buffer text. Typing at the captured insertion point moves its
+marker **after** your typing. Successful final text inserts once at that marker
+with an undo boundary. If point is still at the marker, it advances to the end
+of the inserted text; if you moved it elsewhere, Vox preserves that position.
+Switching buffers does not redirect insertion; killing the original buffer
+cancels. If you narrow the buffer during recording, Vox temporarily widens for
+marker-based preview measurements and final insertion, then restores the
+restriction. Text still lands at the captured marker, even outside the currently
+visible region, without moving point from elsewhere in the buffer. Buffer and
 text-property read-only protection remain in force; failed insertion retains
 final text for manual recovery. Vox never presses Return or submits to an agent.
 

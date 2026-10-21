@@ -54,7 +54,8 @@ public commands -> session core -> backend contract -> provider / CLI
   must not restore state after a yielding write may have cleaned their session.
 - Sinks own display and insertion. The default sink uses the captured buffer and
   marker, not the callback's current buffer or narrowing boundary. It temporarily
-  widens for marker operations and restores the user's restriction and point.
+  widens for marker operations and restores the user's restriction. Point follows
+  final text only if still at the insertion marker; otherwise it is preserved.
   Custom sinks enforce their own editability boundaries and cleanup.
 - Authoritative completion permits one final insertion. Cancellation, socket
   closure, and process exit alone cannot turn a partial transcript into success.
