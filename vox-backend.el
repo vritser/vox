@@ -18,8 +18,8 @@
 (defvar vox--backends (make-hash-table :test #'eq))
 
 (cl-defstruct (vox-backend (:constructor vox--make-backend))
-  "Connection configuration; credentials are resolved only when connecting."
-  name type host endpoint models key resource-id)
+  "Connection and recognition configuration; credentials resolve on connect."
+  name type host endpoint models key resource-id language)
 
 (defun vox--backend-id (value &optional what)
   "Return a validated, copied string for identifier VALUE.
@@ -88,13 +88,18 @@ records contain no resolved key."
                             (vox--backend-id model "model identifier"))
                           (vox-backend-models backend)))
           (key (vox-backend-key backend))
-          (resource (vox-backend-resource-id backend)))
+          (resource (vox-backend-resource-id backend))
+          (language (vox-backend-language backend)))
       (unless (= (length models) (length (delete-dups (copy-sequence models))))
         (user-error "Duplicate Vox model identifier"))
       (when (or resource (eq (vox-backend-type backend) 'doubao))
         (unless (and (stringp resource)
                      (string-match-p "\\`[A-Za-z0-9._-]+\\'" resource))
           (user-error "Invalid Vox backend resource identifier")))
+      (unless (or (null language)
+                  (and (stringp language)
+                       (string-match-p "\\`[A-Za-z]+\\(?:-[A-Za-z0-9]+\\)*\\'" language)))
+        (user-error "Invalid Vox backend language code"))
       (vox--make-backend
        :name name
        :type (vox-backend-type backend)
@@ -102,22 +107,24 @@ records contain no resolved key."
        :endpoint (copy-sequence (vox-backend-endpoint backend))
        :models models
        :key (if (stringp key) (copy-sequence key) key)
-       :resource-id (and resource (copy-sequence resource))))))
+       :resource-id (and resource (copy-sequence resource))
+       :language (and language (copy-sequence language))))))
 
 ;;;###autoload
 (cl-defun vox-make-qwen
     (name &key (host "dashscope.aliyuncs.com")
           (endpoint "/api-ws/v1/realtime")
-          (models '(qwen3-asr-flash-realtime)) key)
+          (models '(qwen3-asr-flash-realtime)) key language)
   "Make a Qwen configuration named NAME without resolving credentials.
 NAME is a display string.  HOST and ENDPOINT select the WSS destination.
 MODELS lists allowed model IDs.  KEY is nil for auth-source lookup, a literal
-key string, or a zero-argument function.
+key string, or a zero-argument function.  LANGUAGE is nil (automatic detection)
+or a model-supported language code string, such as \"en\" or \"zh\".
 
-(fn NAME &key HOST ENDPOINT MODELS KEY)"
+(fn NAME &key HOST ENDPOINT MODELS KEY LANGUAGE)"
   (vox-backend-snapshot
    (vox--make-backend :name name :type 'qwen :host host :endpoint endpoint
-                      :models models :key key)))
+                      :models models :key key :language language)))
 
 ;;;###autoload
 (cl-defun vox-make-doubao

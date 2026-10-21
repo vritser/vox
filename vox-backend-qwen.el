@@ -8,15 +8,13 @@
 (require 'vox-transport)
 (require 'vox-core)
 
-(defcustom vox-qwen-language "zh"
-  "Qwen source language, or nil for automatic detection."
-  :type '(choice (const :tag "Automatic" nil) string) :group 'vox)
 (defcustom vox-qwen-silence-ms 400
   "Server VAD silence duration in milliseconds, between 200 and 6000."
   :type 'integer :group 'vox)
 
-(defun vox-qwen-session-update (event-id)
-  "Build a VAD session.update object using EVENT-ID."
+(defun vox-qwen-session-update (event-id &optional language)
+  "Build a VAD session.update object using EVENT-ID and LANGUAGE.
+LANGUAGE comes from the captured backend; nil omits the language hint."
   (unless (and (integerp vox-qwen-silence-ms)
                (<= 200 vox-qwen-silence-ms 6000))
     (error "Qwen silence duration must be between 200 and 6000 ms"))
@@ -24,9 +22,9 @@
                        :turn_detection
                        (list :type "server_vad" :threshold 0.0
                              :silence_duration_ms vox-qwen-silence-ms))))
-    (when vox-qwen-language
+    (when language
       (setq session (plist-put session :input_audio_transcription
-                               (list :language vox-qwen-language))))
+                               (list :language language))))
     (list :event_id event-id :type "session.update" :session session)))
 
 (defun vox-qwen-normalize (object)
@@ -128,7 +126,8 @@ Provider errors intentionally omit untrusted messages and parameter echoes."
           (list :on-ready on-ready :on-event on-event :on-error on-error
                 :final-items (make-hash-table :test #'equal)))
     (let ((request (vox-json-encode
-                    (vox-qwen-session-update (vox-qwen--event-id session)))))
+                    (vox-qwen-session-update (vox-qwen--event-id session)
+                                             (vox-backend-language configuration)))))
       (vox-transport-open
        session url (list (cons "Authorization" (concat "Bearer " secret)))
        (lambda () (vox-transport-send-text session request))

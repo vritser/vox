@@ -5,18 +5,38 @@
 
 (ert-deftest vox-qwen-config-is-vad-pcm ()
   :tags '(vox-unit)
-  (let* ((vox-qwen-language "zh") (vox-qwen-silence-ms 400)
-         (object (vox-json-read (vox-json-encode (vox-qwen-session-update "e1"))))
+  (let* ((vox-qwen-silence-ms 400)
+         (object (vox-json-read (vox-json-encode (vox-qwen-session-update "e1" "zh"))))
          (session (plist-get object :session)))
     (should (equal (plist-get session :input_audio_format) "pcm"))
     (should (= (plist-get session :sample_rate) 16000))
     (should (equal (plist-get (plist-get session :turn_detection) :type) "server_vad"))
     (should (= (plist-get (plist-get session :turn_detection) :silence_duration_ms) 400))
     (should (equal (plist-get object :event_id) "e1")))
-  (let ((vox-qwen-language nil))
-    (should-not (plist-member (plist-get (vox-qwen-session-update "e") :session)
-                              :input_audio_transcription)))
+  (should-not (plist-member (plist-get (vox-qwen-session-update "e") :session)
+                           :input_audio_transcription))
   (let ((vox-qwen-silence-ms 199)) (should-error (vox-qwen-session-update "e"))))
+
+(ert-deftest vox-qwen-language-default-is-automatic ()
+  :tags '(vox-unit)
+  (let ((backend (vox-make-qwen "Automatic")))
+    (should-not (vox-backend-language backend))
+    (let ((session (plist-get (vox-json-read
+                              (vox-json-encode
+                               (vox-qwen-session-update "auto" (vox-backend-language backend))))
+                             :session)))
+      (should-not (plist-member session :input_audio_transcription)))))
+
+(ert-deftest vox-qwen-language-custom-code-is-sent ()
+  :tags '(vox-unit)
+  (dolist (language '("zh" "en" "ja"))
+    (let* ((backend (vox-make-qwen "Custom" :language language))
+           (session (plist-get (vox-json-read
+                                (vox-json-encode
+                                 (vox-qwen-session-update "custom" (vox-backend-language backend))))
+                               :session)))
+      (should (equal (plist-get session :input_audio_transcription)
+                     (list :language language))))))
 
 (ert-deftest vox-qwen-pure-normalization-and-replacement ()
   :tags '(vox-unit)
@@ -105,6 +125,8 @@
       (should (equal (cdr (assoc "Authorization" headers)) "Bearer test-secret"))
       (should-error (vox-qwen-send-pcm session (unibyte-string 0 0)))
       (funcall (nth 0 callbacks))
+      (should-not (plist-member (plist-get (car sent) :session)
+                                :input_audio_transcription))
       (should (= ready 0))
       (funcall (nth 1 callbacks) "{\"type\":\"session.updated\"}" 'text)
       (funcall (nth 1 callbacks) "{\"type\":\"session.updated\"}" 'text)
@@ -130,14 +152,14 @@
   :tags '(vox-unit)
   ;; Synthetic credentials and delayed fake transports; no provider access.
   (let* ((vox-selection nil)
-         (vox-qwen-language "en") (vox-qwen-silence-ms 600)
+         (vox-qwen-silence-ms 600)
          (key-calls 0)
          (first (vox-make-qwen
-                 "first" :models '(base selected)
+                 "first" :models '(base selected) :language "en"
                  :endpoint "/custom?feature=one&model=old&model=stale"
                  :key (lambda () (cl-incf key-calls) "synthetic-first")))
          (second (vox-make-qwen
-                  "second" :host "dashscope-intl.aliyuncs.com"
+                  "second" :host "dashscope-intl.aliyuncs.com" :language "ja"
                   :models '(other) :endpoint "/other?feature=two"
                   :key (lambda () (cl-incf key-calls) "synthetic-second")))
          (a (vox--make-session :id "a" :generation 1
@@ -149,6 +171,8 @@
     (should (= key-calls 0))
     (setf (vox-backend-host first) "changed.invalid"
           (vox-backend-models first) '("changed"))
+    (aset (vox-backend-language first) 0 ?X)
+    (setf (vox-backend-language second) nil)
     (cl-letf (((symbol-function 'auth-source-search)
                (lambda (&rest _) (ert-fail "Explicit key must take precedence")))
               ((symbol-function 'getenv)
@@ -159,10 +183,10 @@
               ((symbol-function 'vox-transport-send-text)
                (lambda (s text) (push (cons s (vox-json-read text)) sent))))
       (vox-qwen-connect a #'ignore #'ignore #'ignore)
-      (setq vox-qwen-language "ja" vox-qwen-silence-ms 900
+      (setq vox-qwen-silence-ms 900
             vox--active-session b)
       (vox-qwen-connect b #'ignore #'ignore #'ignore)
-      (setq vox-selection 'invalid vox-qwen-language nil vox-qwen-silence-ms 200)
+      (setq vox-selection 'invalid vox-qwen-silence-ms 200)
       (should (= key-calls 2))
       (dolist (connection connections)
         (let* ((s (nth 0 connection)) (url (nth 1 connection))

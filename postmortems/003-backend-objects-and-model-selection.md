@@ -8,6 +8,9 @@ _Date: 2026-10-20. Status: Implemented, uncommitted work based on `3afd60c`._
 
 > Selection workflow superseded by [008](008-unified-selection.md).
 
+> Language configuration superseded by [012](012-automatic-recognition-language.md):
+> Qwen language belongs to each backend constructor, not a global option.
+
 ## Background
 
 Provider API addresses, models and credential-source settings were spread across

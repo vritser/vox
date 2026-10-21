@@ -103,6 +103,17 @@
 
 ### Changed
 
+- **Per-backend Qwen language (breaking):** configure
+  `(vox-make-qwen NAME :language STRING-OR-NIL)`; nil or omission uses automatic
+  detection instead of the former Chinese default. Each Qwen backend keeps an
+  independent language, copied into startup/session configuration before device
+  or credential callbacks. `vox-qwen-language` is removed without compatibility
+  fallback. Move explicit settings into constructors and restart Emacs: the new
+  `vox-backend` struct field cannot be migrated with `vox-reload`. Doubao and CLI
+  language support are unchanged
+  ([configuration](docs/customization.md#recognition-language),
+  [rationale](postmortems/012-automatic-recognition-language.md)).
+
 - **Quiet routine operation:** lifecycle transitions and repeated recording
   instructions no longer print messages. The mode-line indicator remains active;
   opt-in event logging remains independent. Empty recognition and failure recovery

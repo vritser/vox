@@ -179,12 +179,14 @@
 (ert-deftest vox-start-picker-cannot-retarget-model-or-backend-fields ()
   :tags '(vox-unit)
   (vox-start-test--stub
-    (setq vox-backends (list (vox-make-qwen "Synthetic" :models '(first second)))
+    (setq vox-backends (list (vox-make-qwen "Synthetic" :models '(first second)
+                                         :language "en"))
           vox-selection (list "Synthetic" (copy-sequence "first")))
     (cl-letf (((symbol-function 'vox-select-input-device)
                (lambda (&optional _)
                  (setq vox-audio-input selection)
                  (aset (cadr vox-selection) 0 ?X)
+                  (aset (vox-backend-language (car vox-backends)) 0 ?X)
                  (setf (vox-backend-host (car vox-backends)) "changed.example"
                        (vox-backend-models (car vox-backends)) '("changed"))
                  (setq vox-selection '("Synthetic" "second")))))
@@ -192,6 +194,7 @@
     (should (equal (nth 5 start-args) "first"))
     (should-not (eq (car start-args) (car vox-backends)))
     (should (equal (vox-backend-host (car start-args)) "dashscope.aliyuncs.com"))
+    (should (equal (vox-backend-language (car start-args)) "en"))
     (should (equal (vox-backend-models (car start-args)) '("first" "second")))))
 
 (ert-deftest vox-start-default-model-choice-survives-picker ()

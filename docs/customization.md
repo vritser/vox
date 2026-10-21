@@ -13,7 +13,6 @@ group. Cloud recognition is not live-validated; Doubao remains experimental.
   :commands (vox-toggle vox-start vox-stop vox-cancel vox-select-input-device
              vox-select)
   :custom
-  (vox-qwen-language "zh")
   (vox-preview t)
   :bind (("C-c v" . vox-toggle)
          ("C-c C-v" . vox-cancel))
@@ -26,6 +25,50 @@ Install `websocket` through your normal Emacs package manager. Do not add `.deps
 to your normal load path unless intentionally using the audited development copy.
 The CLI backend needs neither FFmpeg nor WebSocket at runtime when it captures
 its own audio.
+
+## Recognition language
+
+Set recognition language when constructing each Qwen backend:
+`(vox-make-qwen NAME :language STRING-OR-NIL)`. Nil or an omitted `:language`
+means automatic detection: Vox omits the language hint from `session.update`.
+A string requests a language supported by the selected Qwen model. Codes use
+ASCII letters, optionally followed by hyphen-separated alphanumeric subtags;
+local syntax validation does not establish model support. For example, keep
+automatic, English, and Chinese configurations together:
+
+```elisp
+(setq vox-backends
+      (list (vox-make-qwen "Qwen Auto" :language nil)
+            (vox-make-qwen "Qwen English" :language "en")
+            (vox-make-qwen "Qwen Chinese" :language "zh")))
+(setq vox-selection '("Qwen Auto" qwen3-asr-flash-realtime))
+;; Select another configuration for the next recording:
+;; (setq vox-selection '("Qwen English" qwen3-asr-flash-realtime))
+;; Or select Chinese:
+;; (setq vox-selection '("Qwen Chinese" qwen3-asr-flash-realtime))
+```
+
+The commented selection assignments are alternatives; choose one, or use the
+existing `M-x vox-select` backend/model picker. `(vox-make-qwen "Qwen Auto")` is equivalent
+to the explicit nil example. Each backend has its own independent language; no
+global language setting is consulted. Codes are passed through to Qwen; supported
+languages and recognition quality depend on the selected model.
+
+Language strings are copied with backend configuration into the startup/session
+snapshot before device prompting or credential callbacks. Changing a backend,
+mutating its original language string, or selecting another backend affects a
+later recording, not the startup/session already using that snapshot.
+
+**Migration:** remove `vox-qwen-language` from your init file and saved Customize
+settings; the global variable is removed without an alias or compatibility
+fallback. Put any explicit language on each relevant `vox-make-qwen` call, or
+omit `:language` for automatic detection. Restart Emacs after updating your
+configuration: the shared `vox-backend` struct gains a `language` field, and
+`vox-reload` does not migrate existing structs or remove old definitions.
+
+This constructor option is Qwen-specific. It does not add language support to
+Doubao or change the CLI contract; configure a self-recording CLI's language
+through that program's own options.
 
 ## Choose an audio device
 
@@ -178,7 +221,8 @@ of account access. Selection does not save settings. Quit or invalid input leave
 the current selection intact. If callbacks change the directory, its objects, or
 the selection during completion, the stale prompt errors without overwriting the
 newer state. A nested successful picker also supersedes the outer prompt.
-Active sessions keep detached configuration/model snapshots.
+Active sessions keep detached configuration/model snapshots, including each Qwen
+backend's language.
 
 Explicit programmatic calls remain independent of the current selection and
 directory:
@@ -209,12 +253,14 @@ Realtime model with this adapter; local mocked tests do not establish model
 compatibility or recognition accuracy.
 
 Both constructors accept a display NAME, `:host`, `:endpoint`, `:models`, and
-`:key`. Hosts are DNS names or IPv4 addresses with an optional port, without a
-scheme or path. Endpoints are absolute paths, optionally with query parameters;
-Vox always uses WSS. For Qwen the selected model replaces any existing `model`
-query parameter, including on custom endpoints; it is never ignored just because
-a custom endpoint is supplied. Doubao sends the selected ID in `model_name` and
-also accepts the separate `:resource-id` entitlement/billing option.
+`:key`. Qwen also accepts `:language` (nil or a language-code string), as described
+under [Recognition language](#recognition-language). Hosts are DNS names or IPv4
+addresses with an optional port, without a scheme or path. Endpoints are absolute
+paths, optionally with query parameters; Vox always uses WSS. For Qwen the selected
+model replaces any existing `model` query parameter, including on custom
+endpoints; it is never ignored just because a custom endpoint is supplied. Doubao
+sends the selected ID in `model_name` and also accepts the separate `:resource-id`
+entitlement/billing option.
 
 `:key` accepts three forms. nil (the default) reads `auth-source` for the host
 being connected, using login `apikey`, and signals an error when no entry is
@@ -240,11 +286,11 @@ default, exposed for a different host or user:
 `(lambda () (vox-api-key-from-auth-source "proxy.example" "me"))`.
 
 Key results are checked for empty values and header control characters, and
-function errors are redacted. Backend/model configuration is copied before
-startup callbacks and the device picker. Editing the original object or selecting
-another backend or model affects the next recording, not an active one. Canceling during
-credential acquisition tears down the pending session without opening transport
-afterward.
+function errors are redacted. Backend/model configuration, including Qwen's
+language string, is copied before startup callbacks and the device picker.
+Editing the original object or selecting another backend or model affects the
+next recording, not an active one. Canceling during credential acquisition tears
+down the pending session without opening transport afterward.
 
 **Direct migration:** remove the `vox-backend` and `vox-model` variable settings
 and the `vox-select-model` command with `vox-model-history` from your
@@ -261,8 +307,11 @@ Also move former `vox-qwen-model`, `vox-qwen-endpoint`, `vox-doubao-endpoint`,
 constructor and selection. `VOX_QWEN_API_KEY` / `VOX_DOUBAO_API_KEY` are not read;
 use auth-source or an explicit `:key (lambda () (getenv ...))`. Update your init
 and restart Emacs to avoid mixing loaded old definitions with the new API.
-Audio-device, silence-detection, language/VAD, and packet-size options are
-unchanged. The CLI uses `(setq vox-selection 'cli)` and manages its own model.
+Move the removed `vox-qwen-language` setting to each Qwen constructor's
+`:language` argument; there is no global fallback. The added backend struct field
+requires a restart, not `vox-reload` migration. Audio-device, silence-detection,
+VAD, and packet-size options are unchanged. Doubao gains no language option.
+The CLI uses `(setq vox-selection 'cli)` and manages its own model and language.
 
 ## Credentials and regions
 

@@ -15,7 +15,7 @@ root; the development layout does not add a runtime dependency or change the API
 | [vox-device.el](../vox-device.el) | On-demand bounded FFmpeg listings, platform parsers, explicit minibuffer input selection and opt-in persistence |
 | [vox-audio.el](../vox-audio.el) | FFmpeg capture process, binary PCM delivery, stop-to-sentinel handling |
 | [vox-transport.el](../vox-transport.el) | Guarded WebSocket I/O, fragments, message limits, TLS and asynchronous-handshake compatibility |
-| [vox-backend-qwen.el](../vox-backend-qwen.el) | Qwen VAD configuration, provider messages, normalized recognition events |
+| [vox-backend-qwen.el](../vox-backend-qwen.el) | Qwen VAD configuration, captured backend language on provider requests, normalized recognition events |
 | [vox-backend-doubao.el](../vox-backend-doubao.el) | Experimental Doubao binary/gzip protocol, snapshot events, final packet |
 | [vox-backend-cli.el](../vox-backend-cli.el) | Trusted external process, NDJSON v1 framing and explicit completion/exit contract |
 | [vox-ui.el](../vox-ui.el) | Preview overlay and captured-buffer sink, read-only checks, one undoable insertion |
@@ -71,19 +71,29 @@ public commands -> session core -> backend contract -> provider / CLI
   malformed entry blocks every resolution. Explicit backend/core APIs bypass this
   selection. Completion validates snapshots and rejects reentrant configuration
   changes without overwriting newer choices; it never connects or reads credentials.
-- Backend factories are pure configuration construction. Core captures a detached
-  backend object and selected model in method metadata before state callbacks;
-  public startup also snapshots them before the device picker. Key functions stay
-  lazy and their returned secrets are never cached in those objects. Adapters
-  approve the captured endpoint before resolving credentials, recheck session
-  ownership after approval/key callbacks, and capture the initial provider request
-  before asynchronous transport opening. Model selection affects future sessions.
+- Backend factories are pure configuration construction. `vox-make-qwen` accepts
+  `:language` as a string or nil (the default, automatic detection). The shared
+  `vox-backend` struct owns the language field; Qwen alone uses it on the wire,
+  omitting the hint for nil. There is no global `vox-qwen-language` or fallback,
+  and no new language option for Doubao or the CLI. Core captures a detached
+  backend object, including a copy of the language string, and selected model in
+  method metadata before state callbacks; public startup also snapshots them
+  before the device picker. Independent Qwen backends cannot change each other's
+  language, and later configuration mutation cannot alter a captured startup or
+  session. Key functions stay lazy and their returned secrets are never cached
+  in those objects. Adapters approve the captured endpoint before resolving
+  credentials, recheck session ownership after approval/key callbacks, and capture
+  the initial provider request
+  before asynchronous transport opening. Model and language changes affect future
+  sessions, not the snapshot captured before those callbacks.
 - Loading Vox is silent and does not start capture or connect. Backend registration
   is package setup, not permission to send audio.
 - Source reload refuses active ownership, pending startup and device interaction.
   Core/public startup and device discovery refuse reentry while reload is active.
   Exact source loads preserve settings, session generations and retained history;
-  they do not migrate structures, unload definitions, or restart sessions.
+  they do not migrate structures, unload definitions, or restart sessions. Adding
+  the backend language field therefore requires an Emacs restart, not a
+  `vox-reload` migration.
 - Event logging is disabled by default. Its input boundary accepts fixed event
   names/enums and bounded integers only, never raw provider data, text, PCM,
   credentials or configuration strings. A bounded ring stores memory-only lines;
