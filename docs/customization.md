@@ -6,20 +6,37 @@ group. Cloud recognition is not live-validated; Doubao remains experimental.
 
 ## Example configuration
 
+Install directly from Git with `use-package :vc`:
+
 ```elisp
 (use-package vox
-  :load-path "/path/to/vox"
-  :ensure nil
-  :commands (vox-toggle vox-start vox-stop vox-cancel vox-select-input-device
-             vox-select)
-  :custom
-  (vox-preview t)
-  :bind (("C-c v" . vox-toggle)
-         ("C-c C-v" . vox-cancel))
+  :vc (:url "https://github.com/vritser/vox" :rev :newest)
+  :demand t
   :config
-  (setq vox-backends (list (vox-make-qwen "DashScope"))
+  (setq vox-backends
+        (list
+         (vox-make-qwen "DashScope"
+           :key "YOUR_DASHSCOPE_API_KEY"
+           :host "dashscope.aliyuncs.com"
+           :endpoint "/api-ws/v1/realtime"
+           :models '(qwen3-asr-flash-realtime)
+           :language nil) ; Auto-detect, or use "zh" / "en".
+         (vox-make-doubao "SeedASR"
+           :key "YOUR_DOUBAO_API_KEY"
+           :host "openspeech.bytedance.com"
+           :endpoint "/api/v3/sauc/bigmodel_async"
+           :models '(bigmodel)
+           :resource-id "volc.seedasr.sauc.duration"))
+        ;; Default backend/model; use M-x vox-select to switch later.
         vox-selection '("DashScope" qwen3-asr-flash-realtime)))
 ```
+
+Replace the key for your selected backend; you can remove the unused entry.
+For Doubao, select `("SeedASR" bigmodel)` and check that the resource ID matches
+your enabled service. Literal keys are visible in your configuration and
+`C-h v vox-backends`; never commit them. For persistent use, prefer `:key nil`
+for auth-source or a key function; see [credentials](#credentials-and-regions).
+Loading the package does not start recording or contact a provider.
 
 Install `websocket` through your normal Emacs package manager. Do not add `.deps`
 to your normal load path unless intentionally using the audited development copy.
@@ -315,11 +332,17 @@ The CLI uses `(setq vox-selection 'cli)` and manages its own model and language.
 
 ## Credentials and regions
 
-The [README API key setup](../README.md#api-key-configuration) covers a masked
-in-session key and an encrypted-file setup. `:key nil` reads `auth-source` for
-the host matching the endpoint, using user `apikey`. Prefer an encrypted
-auth-source file configured outside this repository. Example structure, **not
-real keys**:
+`:key nil` reads `auth-source` for the host matching the endpoint, using user
+`apikey`. Prefer an encrypted auth-source file outside this repository. Configure
+its location in Emacs:
+
+```elisp
+(require 'auth-source)
+(add-to-list 'auth-sources "~/.authinfo.gpg")
+```
+
+Open that file in Emacs and save the relevant entries encrypted with Emacs/GnuPG
+(a working GnuPG setup is required). Example structure, **not real keys**:
 
 ```text
 machine dashscope.aliyuncs.com login apikey password YOUR_KEY

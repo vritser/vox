@@ -1,215 +1,101 @@
 # Vox
 
-Independent, native Emacs streaming speech input. Vox previews recognition at
-point and inserts authoritative final text once, with an undo boundary. It never
-presses Return or submits to an agent. No Python, Node, local ASR bridge, or
-dsh-emacs dependency is required.
+Speak in Emacs, and Vox turns your voice into text at the cursor.
 
-**Status: 0.1.0 pre-release.** Offline and synthetic-process checks exist;
-authenticated cloud recognition has **not** been validated. Qwen is VAD-only;
-**Doubao is experimental** until its real handshake, microphone stream, and final
-packet are verified. A socket close is not successful recognition.
+Vox is a native streaming speech input package with Qwen, Doubao, and an optional
+CLI backend. It previews recognition as you speak, then inserts the final text
+once with an undo boundary. It never presses Return or submits on your behalf.
+No Python or Node bridge is required.
 
 ## Quick start
 
-1. Use Emacs 28.1+ and install `websocket` through your Emacs package manager
-   (1.15/1.16-compatible API). Cloud backends need native GnuTLS and FFmpeg with
-   an input backend supported by your OS; Doubao also needs native zlib.
-2. Add the checkout to your configuration:
+Requires Emacs, `websocket.el`, and FFmpeg for cloud recording. Emacs needs
+native GnuTLS support; Doubao also needs native zlib.
 
-   ```elisp
-   (add-to-list 'load-path "/path/to/vox")
-   (require 'vox)
-   (global-set-key (kbd "C-c v") #'vox-toggle)
-   (global-set-key (kbd "C-c C-v") #'vox-cancel)
-   ```
-
-3. Run `M-x vox-select-input-device` and choose your input in the minibuffer, or
-   let the first interactive `C-c v` ask when `vox-audio-input` is unset.
-   Selection lasts for this Emacs session; `C-u M-x vox-select-input-device`
-   saves it through Customize. Existing explicit input settings are preserved.
-   See [device setup and platform support](docs/customization.md#choose-an-audio-device).
-4. [Configure an API key](#api-key-configuration) for Qwen (default) or
-   experimental Doubao, and check the [provider region](docs/customization.md#credentials-and-regions).
-   Starting a cloud session sends
-   audio to the provider and may incur charges. An
-   [optional CLI backend](docs/customization.md#optional-cli-backend) can instead
-   capture its own audio.
-5. In an editable buffer, press `C-c v` **once**, speak, then pause. For Qwen and
-   Doubao, Vox stops after about 1.2 seconds of quiet audio and inserts only after
-   authoritative completion. Press `C-c v` again to finish early, or `C-c C-v`
-   to cancel without insertion. The self-recording CLI still requires manual stop.
-
-A [use-package example](docs/customization.md#example-configuration) and all
-setup details are in the customization guide.
-
-## Short-phrase and manual modes
-
-The default for Vox-owned capture is short-phrase input:
+Install `websocket` through your Emacs package manager, then use the following
+configuration to install Vox directly from Git:
 
 ```elisp
-(setq vox-stop-mode 'silence
-      vox-silence-seconds 1.2)
+(use-package vox
+  :vc (:url "https://github.com/vritser/vox" :rev :newest)
+  :demand t
+  :config
+  (setq vox-backends
+        (list
+         (vox-make-qwen "DashScope"
+           :key "YOUR_DASHSCOPE_API_KEY"
+           :host "dashscope.aliyuncs.com"
+           :endpoint "/api-ws/v1/realtime"
+           :models '(qwen3-asr-flash-realtime)
+           :language nil) ; Auto-detect, or use "zh" / "en".
+         (vox-make-doubao "SeedASR"
+           :key "YOUR_DOUBAO_API_KEY"
+           :host "openspeech.bytedance.com"
+           :endpoint "/api/v3/sauc/bigmodel_async"
+           :models '(bigmodel)
+           :resource-id "volc.seedasr.sauc.duration"))
+        ;; Default backend/model; use M-x vox-select to switch later.
+        vox-selection '("DashScope" qwen3-asr-flash-realtime)))
 ```
 
-To record continuously and stop manually, use `(setq vox-stop-mode 'manual)`.
-Both modes insert **once after the whole session finishes**, not once per sentence.
-Settings apply to the next recording. You can always stop early or cancel.
+Replace the key placeholder for the backend you want to use; the other entry
+can be removed. The defaults select Qwen in Beijing. For Doubao, set
+`vox-selection` to `'("SeedASR" bigmodel)` or run `M-x vox-select`; its resource ID
+must match your enabled service. Keep the endpoint/model pairing unless you know
+the provider supports your changes. See [regions and provider settings](docs/customization.md#credentials-and-regions).
 
-Automatic stopping uses local PCM energy, not delayed recognition text. Initial
-silence alone does not stop recording. Background noise can prevent stopping;
-quiet speech or long pauses can cause early stopping. Adjust the silence duration
-or `vox-silence-threshold`, or choose manual mode. See
-[silence detection](docs/customization.md#short-phrase-silence-detection) for tuning
-and the CLI limitation. Capture shutdown and provider finalization add latency
-after the quiet interval; 1.2 seconds is not a deadline for text insertion.
+No key bindings are installed by this configuration; use `M-x` or bind commands
+to keys of your choice. Loading Vox does not start recording.
 
-## Backends and models
+### API key configuration
 
-Configure named backend objects in `vox-backends`, then use `M-x vox-select`
-to choose a backend/model pair for the next recording:
+Literal keys make a quick trial easy, but are visible in your init file and
+`C-h v vox-backends`. Never commit them or put them in shared configuration.
+For persistent use, replace `:key "..."` with `:key nil` to use `auth-source`
+(provider host, login `apikey`), or with a function such as
+`:key (lambda () (getenv "MY_ASR_KEY"))` to read an environment variable available
+to Emacs. See the [credential setup guide](docs/customization.md#credentials-and-regions).
 
-```elisp
-(setq vox-backends
-      (list (vox-make-qwen "DashScope")
-            (vox-make-doubao "SeedASR")))
-(setq vox-selection '("SeedASR" bigmodel))
-```
+Starting a cloud recording sends audio to the selected provider and may incur
+charges.
 
-`vox-selection` defaults to nil: the first backend and its first model. The
-built-in directory contains Qwen. `("SeedASR" nil)` selects SeedASR's first
-model; an explicit model may be a symbol or string. A registered protocol symbol
-selects that backend without a model choice: `'cli` for the optional
-self-recording CLI, `'qwen` / `'doubao` for factory defaults, or an extension
-registered with `vox-register-backend`. Missing backend names, unregistered
-symbols, and invalid models are errors; a malformed directory entry blocks
-directory selection until it is fixed. Active sessions retain their captured
-configuration. See the
-[configuration guide](docs/customization.md#backends-and-models) for endpoints,
-credentials, programmatic APIs, and migration. These objects configure existing
-native ASR protocols; arbitrary OpenAI-compatible HTTP APIs need their own adapter.
+## Usage
 
-## API key configuration
+1. Run `M-x vox-select-input-device` to choose a microphone. The first interactive
+   recording also asks if no input is configured. Use a `C-u` prefix to save the
+   choice across Emacs restarts.
+2. In an editable buffer, run `M-x vox-toggle`, speak, then pause. By default,
+   recording stops after about 1.2 seconds of quiet audio; text is inserted after
+   the provider finishes processing.
+3. Run `M-x vox-toggle` again to finish early, or `M-x vox-cancel` to discard the
+   recording without insertion.
 
-By default Vox reads `auth-source` for the host being connected, using login
-`apikey`; it does not read environment variables or load a `.env` file. Supply
-`:key` to use a literal key or another source:
-
-```elisp
-;; Literal key (visible in your init file and in `C-h v vox-backends')
-(setq vox-backends (list (vox-make-qwen "DashScope" :key "sk-..."))
-      vox-selection nil)
-
-;; Any other source, including the environment
-(setq vox-backends
-      (list (vox-make-qwen "DashScope"
-              :key (lambda () (getenv "MY_ASR_KEY"))))
-      vox-selection nil)
-```
-
-A literal key is convenient for a quick trial, but it is visible in your
-configuration, `C-h v vox-backends`, and any backtrace that prints the backend.
-Prefer auth-source or a function for a key you keep.
-
-| Backend / region | `auth-source` host |
+| Command | Action |
 | --- | --- |
-| Qwen, Beijing (default) | `dashscope.aliyuncs.com` |
-| Qwen, Singapore | `dashscope-intl.aliyuncs.com` |
-| Doubao (experimental) | `openspeech.bytedance.com` |
+| `vox-select` | Choose a backend and model for the next recording |
+| `vox-start` / `vox-stop` | Start recording / finish gracefully |
+| `vox-show-transcript` | View current or last text; unfinished text is marked unconfirmed |
+| `vox-copy-confirmed-text` | Copy confirmed text to the kill ring |
+| `vox-forget-transcript` | Clear the last session and its recovery buffer |
 
-### Try it in the current Emacs session
+For longer dictation, set `(setq vox-stop-mode 'manual)` and stop explicitly.
+Both modes insert once at the end of the session, not after each sentence. The
+self-recording CLI backend always requires manual stop. See
+[silence detection](docs/customization.md#short-phrase-silence-detection) for tuning.
 
-For Qwen, press `M-:` and evaluate this expression, then enter your key at the
-masked prompt. The key stays in the backend object for this session and is not
-written to a file:
-
-```elisp
-(setq vox-backends
-      (list (vox-make-qwen "DashScope"
-              :key (read-passwd "DashScope API key: ")))
-      vox-selection nil)
-```
-
-For Doubao, construct `(vox-make-doubao "SeedASR")` the same way and check its
-[resource ID and experimental status](docs/customization.md#doubao-experimental).
-`C-h v vox-backends` reveals the key, so replace or clear it when you are done.
-
-### Keep a key across restarts (recommended)
-
-Use an encrypted auth-source file outside the repository. Add this to your Emacs
-configuration; it contains only the file location, not a secret:
-
-```elisp
-(require 'auth-source)
-(add-to-list 'auth-sources "~/.authinfo.gpg")
-```
-
-Open that file in Emacs and add the entry for your provider, replacing the
-placeholder with your real key. These examples are **not real credentials**:
-
-```text
-machine dashscope.aliyuncs.com login apikey password YOUR_QWEN_API_KEY
-machine dashscope-intl.aliyuncs.com login apikey password YOUR_SINGAPORE_API_KEY
-machine openspeech.bytedance.com login apikey password YOUR_DOUBAO_API_KEY
-```
-
-Save it encrypted using Emacs/GnuPG; this requires a working GnuPG setup. Keep
-only the entries you need. The host must match the selected endpoint, and the
-login must be `apikey`. After changing an entry, run
-`M-x auth-source-forget-all-cached` before retrying. Prefer auth-source for a key
-you keep: an init file or `:key` literal is readable by anything that prints the
-configuration. Never commit a real key or include one in an issue report. See the
-[credential and region guide](docs/customization.md#credentials-and-regions)
-for endpoint selection.
-
-## Keys and commands
-
-The keys below are suggestions installed by the configuration above, not global
-bindings enabled when Vox loads.
-
-| Key / command | Action |
-| --- | --- |
-| `M-x vox-select` | Choose a configured backend/model pair or CLI for the next recording |
-| `M-x vox-select-input-device` | Choose an input; prefix `C-u` saves through Customize |
-| `C-c v` / `M-x vox-toggle` | Start when idle, stop when recording; otherwise report status |
-| `C-c C-v` / `M-x vox-cancel` | Discard the session without inserting text |
-| `M-x vox-start` / `M-x vox-stop` | Explicit start / graceful stop; stop while connecting cancels |
-| `M-x vox-show-transcript` | Display current/last in-memory text; unfinished text is UNCONFIRMED |
-| `M-x vox-copy-confirmed-text` | Explicitly copy confirmed/final text to the kill ring |
-| `M-x vox-forget-transcript` | Forget the last session and remove the recovery buffer |
-| `M-x vox-reload` | Reload local source while idle, preserving settings and history ([guide](docs/development.md#reload-without-restarting-emacs)) |
-| `M-x vox-toggle-event-log` / `M-x vox-show-event-log` | Enable safe event metadata and inspect recording rounds ([guide](docs/customization.md#event-log-for-repeated-recordings)) |
-
-Preview is an overlay, not buffer text. Switching buffers does not redirect the
-captured insertion target; read-only protection is never bypassed. The default
-duration limit is 300 seconds. Normal operation does not write audio or
-transcripts to disk. See [interaction and safety](docs/customization.md#interaction-and-safety)
-for recovery, capture-tail risks, and privacy details.
-
-**Transport limits:** queues are bounded, but native socket writes can block;
-native gzip decoding cannot enforce a hard allocation cap during decompression.
-See [transport and privacy limits](docs/customization.md#queueing-transport-and-privacy-limits).
+Switching buffers does not redirect the insertion target. Normal operation keeps
+audio and transcripts off disk; transcript recovery is in memory.
 
 ## Documentation
 
-- [Customization](docs/customization.md): devices, credentials, providers,
-  limits, CLI protocol, embedding, and troubleshooting.
-- [Development](docs/development.md): verification, tests, packaging, commit
-  conventions, and manual acceptance.
-- [Architecture](docs/architecture.md): module ownership and boundaries.
-- [Protocol audit](docs/protocol-audit.md), [transport audit](docs/transport-audit.md),
-  and [fixture provenance](test/fixtures/README.md): evidence and open questions.
-- [Postmortems](postmortems/): historical decisions, tradeoffs, and limitations.
-- [Changelog](CHANGELOG.md): unreleased changes.
+- [Customization](docs/customization.md): devices, credentials, languages,
+  backends, diagnostics, and troubleshooting.
+- [Development](docs/development.md): verification, packaging, and live acceptance.
+- [Architecture](docs/architecture.md): module ownership and extension points.
+- [Protocol audit](docs/protocol-audit.md) and [transport audit](docs/transport-audit.md):
+  verification evidence and known limits.
+- [Changelog](CHANGELOG.md) and [decision records](postmortems/).
 
-## Contributing
+For contributions, follow [AGENTS.md](AGENTS.md) and run `scripts/verify.sh`.
 
-Keep changes focused and follow [AGENTS.md](AGENTS.md). Run
-`scripts/setup-deps.sh` to obtain the pinned, checksum-verified development
-WebSocket dependency, then `scripts/verify.sh`. CI uses the same verification
-entry point. See [Development](docs/development.md) for individual commands and
-short English Conventional Commit subjects. Commit only when explicitly asked;
-do not infer permission to push.
-
-Vox is licensed under [GPL-3.0-or-later](LICENSE). Official reference materials
-retain their upstream ownership; see [fixture provenance](test/fixtures/README.md).
+Licensed under [GPL-3.0-or-later](LICENSE).

@@ -103,6 +103,13 @@
 
 ### Changed
 
+- **Simpler README:** lead with a one-sentence introduction and a `use-package`
+  Git installation setup without key bindings, mirrored in the customization
+  guide. Use `:demand t` and editable backend examples with key placeholders,
+  hosts, endpoints, models, Qwen language, and the Doubao resource ID. Keep basic
+  usage on the front page and link to dedicated guides for detailed configuration
+  and validation status.
+
 - **Per-backend Qwen language (breaking):** configure
   `(vox-make-qwen NAME :language STRING-OR-NIL)`; nil or omission uses automatic
   detection instead of the former Chinese default. Each Qwen backend keeps an
