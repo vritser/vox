@@ -332,23 +332,16 @@ or sends input to an agent."
        (when (memq state '(completed cancelled error))
          (when (overlayp overlay) (delete-overlay overlay))
          (setq overlay nil))
-       (unless noninteractive
+       (when (and (not noninteractive) (eq state 'completed))
          (cond
-           ((eq state 'recording)
-            (if (eq (vox-session-stop-mode session) 'silence)
-                (message "Vox: recording; pause to finish, or use vox-stop to end early")
-              (message "Vox: recording (manual stop); use vox-stop or vox-toggle to finish")))
-           ((and (eq state 'completed)
-                 (string-empty-p
-                  (string-trim (or (vox-session-final-text session) ""))))
+           ((string-empty-p
+             (string-trim (or (vox-session-final-text session) "")))
             (message
              "Vox: no speech recognized; nothing inserted (check the input device)%s"
              (if (plist-get (vox-session-statistics session) :audio-tail-risk)
                  "; recorder tail may be truncated" "")))
-           ((and (memq state '(finalizing completed))
-                 (plist-get (vox-session-statistics session) :audio-tail-risk))
-            (message "Vox: %s; recorder needed a second interrupt, tail audio may be truncated" state))
-           (t (message "Vox: %s" state)))))
+           ((plist-get (vox-session-statistics session) :audio-tail-risk)
+            (message "Vox: completed; recorder needed a second interrupt, tail audio may be truncated")))))
      :on-finish
      (lambda (session text)
        (let ((buffer (vox-session-target-buffer session))

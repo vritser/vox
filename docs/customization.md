@@ -363,6 +363,13 @@ glyph is used when the display cannot render SVG. The icon inherits the state
 face color. Set `vox-mode-line` to nil to hide it; `vox-mode-line-icon` changes
 the fallback glyph.
 
+Routine lifecycle transitions do not print messages or repeat recording
+instructions. Empty recognition and failures still report an actionable message;
+possible recorder tail truncation is reported once at completion. These messages
+do not depend on `vox-event-log-enabled`, which controls only the opt-in memory
+log viewed with `vox-show-event-log`. Explicit command feedback, such as invoking
+`vox-toggle` while finalizing, is unchanged.
+
 To place the icon somewhere else, remove `vox-mode-line-construct` from
 `global-mode-string` and insert it into your own `mode-line-format`.  For the
 default mode line, this puts it at the front:
@@ -421,7 +428,7 @@ commits a transcript. Errors retain accepted text for explicit recovery.
   until `vox-stop`/`vox-toggle` or the duration limit. Mode and thresholds are
   captured when the session starts. Cancel remains available in either mode.
 - A self-recording backend such as CLI does not supply PCM to Vox, so its effective
-  mode is always manual, shown in the recording status. Text-event arrival gaps
+  mode is always manual. Text-event arrival gaps
   are never treated as acoustic silence; the CLI protocol is unchanged.
 
 Local stopping is separate from `vox-qwen-silence-ms`, which controls server-side
@@ -457,7 +464,9 @@ from an unconfirmed hypothesis; it cannot create text the provider did not retur
 Continuous cloud audio may incur charges. FFmpeg interruption can truncate the
 last capture block. If the first interrupt does not stop capture, one guarded
 retry runs after 0.5 seconds (`vox-audio-interrupt-retry-delay`); statistics record
-`:audio-tail-risk`, and the default UI warns that tail audio may be truncated.
+`:audio-tail-risk`, and the default UI warns once on successful completion that
+tail audio may be truncated, combining this with the empty-recognition message
+when needed. Failed sessions retain their recovery message instead.
 Forced cleanup or odd trailing PCM samples fail rather than pretend the stream
 is lossless.
 
@@ -518,8 +527,8 @@ Custom endpoints therefore remain a trust decision.
 ```
 
 The executable records its own audio, so Vox cannot perform local silence
-detection for this backend. Its recording status explicitly says manual stop;
-use `vox-stop` or `vox-toggle` to finish. It must speak UTF-8 NDJSON v1 on stdout:
+detection for this backend. Use `vox-stop` or `vox-toggle` to finish manually.
+It must speak UTF-8 NDJSON v1 on stdout:
 
 ```jsonl
 {"v":1,"type":"started"}

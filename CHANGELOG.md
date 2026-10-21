@@ -94,6 +94,13 @@
 
 ### Changed
 
+- **Quiet routine operation:** lifecycle transitions and repeated recording
+  instructions no longer print messages. The mode-line indicator remains active;
+  opt-in event logging remains independent. Empty recognition and failure recovery
+  still produce actionable messages, and recorder tail-risk warnings appear only
+  once at completion rather than during both finalizing and completion
+  (rationale: [postmortem 010](postmortems/010-quiet-lifecycle-messages.md)).
+
 - **Empty-recognition diagnostic:** a successful provider completion with no
   transcript now reports "no speech recognized" and points at the input device
   instead of claiming a generic completed status. This distinguishes a silent
@@ -105,7 +112,7 @@
   `vox-silence-threshold`; manual mode bypasses analysis. The bounded energy
   detector does not classify human speech, and initial silence does not arm it.
   Authoritative completion still gates one final insertion. Self-recording CLI
-  remains manual, with the effective mode shown in recording status
+  remains manual
   (rationale: [postmortem 001](postmortems/001-short-phrase-silence-stop.md)).
 
 - **Namespaced credential environment:** Qwen reads `VOX_QWEN_API_KEY` and
