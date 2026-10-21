@@ -10,15 +10,16 @@ group. Cloud recognition is not live-validated; Doubao remains experimental.
 (use-package vox
   :load-path "/path/to/vox"
   :ensure nil
-  :commands (vox-toggle vox-start vox-stop vox-cancel vox-select-input-device vox-select-model)
+  :commands (vox-toggle vox-start vox-stop vox-cancel vox-select-input-device
+             vox-select)
   :custom
   (vox-qwen-language "zh")
   (vox-preview t)
   :bind (("C-c v" . vox-toggle)
          ("C-c C-v" . vox-cancel))
   :config
-  (setq vox-backend (vox-make-qwen "DashScope")
-        vox-model 'qwen3-asr-flash-realtime))
+  (setq vox-backends (list (vox-make-qwen "DashScope"))
+        vox-selection '("DashScope" qwen3-asr-flash-realtime)))
 ```
 
 Install `websocket` through your normal Emacs package manager. Do not add `.deps`
@@ -133,31 +134,69 @@ provider and can incur charges. Offline ERT tests use a local fake provider.
 
 ## Backends and models
 
-Configuration follows the backend-object/model-selection pattern used by
-[gptel](https://github.com/karthink/gptel), without depending on gptel or sharing
-its HTTP protocols. API settings belong to a backend object, not a separate set
-of provider globals:
+API settings belong to named backend objects in the plain Lisp variable
+`vox-backends`. Its default is a one-element directory containing Qwen.
+`vox-selection` is the only current choice; it holds a backend name and model,
+or names a registered protocol, never a second copy of the backend configuration.
 
 ```elisp
-(setq vox-backend
-      (vox-make-qwen "DashScope"
-        :host "dashscope.aliyuncs.com"
-        :endpoint "/api-ws/v1/realtime"
-        :models '(qwen3-asr-flash-realtime)))
-(setq vox-model 'qwen3-asr-flash-realtime)
+(setq vox-backends
+      (list (vox-make-qwen "DashScope Beijing")
+            (vox-make-qwen "DashScope Singapore"
+              :host "dashscope-intl.aliyuncs.com")
+            (vox-make-doubao "SeedASR")))
+(setq vox-selection nil)                 ; first backend, first model
+(setq vox-selection '("SeedASR" nil))    ; named backend, first model
+(setq vox-selection '("SeedASR" bigmodel)) ; explicit symbol or string model
+(setq vox-selection 'qwen)               ; registered symbol, factory defaults
+(setq vox-selection 'cli)                ; self-recording CLI, no remote model
 ```
 
-`vox-backend` is configured in Lisp initialization code. It is a plain variable,
-not a `defcustom`, so it no longer appears in Customize; `setq`,
-`:custom (vox-backend 'qwen)`, and saved `custom-set-variables` forms still set it.
-The constructors are pure: they do not connect, read keys, enumerate devices, or
-modify files. `vox-model` accepts a symbol/string; nil uses the first model in
-the backend's `:models` list. Run `M-x vox-select-model` to choose among those
-configured IDs without querying a server or saving settings; it reports the
-chosen model and keeps the choice in `vox-model-history`. An unlisted model is
-rejected, not silently replaced. The list is an explicit allowlist, not proof
-that your account can access each model. Configure only models supported by the
-selected provider's realtime protocol.
+Names are unique, case-sensitive strings. Duplicate names (even repeated copies
+of the same object), malformed or empty directories, missing/renamed backend
+names, unregistered symbols, and unlisted models produce errors. Directory
+validation is all-or-nothing, and errors name the failing entry position: one
+malformed or duplicated entry blocks startup and completion for every directory
+entry until it is fixed or removed. There is no fallback for a stale or invalid
+explicit selection. Nil chooses the first backend/model without assigning that
+choice back to `vox-selection`. Reordering the directory therefore changes nil's
+default; a named selection continues to identify its named backend.
+
+Run `M-x vox-select` for one completion list of backend/model pairs, plus
+`cli (no remote model)`. Pair labels quote each component, for example
+`"SeedASR" / "bigmodel"`, so names containing separators remain unambiguous.
+The picker stores a two-string list, or the symbol `cli`, and uses
+`vox-selection-history`. It is case-sensitive even when global completion ignores
+case. It can replace a stale current choice without first resolving it, but
+requires a valid nonempty directory. Other registered symbols (`qwen`, `doubao`,
+or an extension) are set in Lisp, not offered by the picker. For CLI-only setups,
+set `(setq vox-selection 'cli)` directly; startup then ignores the directory.
+
+Constructors and completion read no credentials and make no connection or device
+probe. The configured model list is an allowlist, not remote discovery or proof
+of account access. Selection does not save settings. Quit or invalid input leaves
+the current selection intact. If callbacks change the directory, its objects, or
+the selection during completion, the stale prompt errors without overwriting the
+newer state. A nested successful picker also supersedes the outer prompt.
+Active sessions keep detached configuration/model snapshots.
+
+Explicit programmatic calls remain independent of the current selection and
+directory:
+
+```elisp
+(vox-start backend sink model) ; model optional; nil/omitted = backend's first
+(vox-core-start backend sink buffer marker model) ; headless sink may be nil
+(vox-backend-methods backend model) ; validate and snapshot, no connection
+```
+
+Here `backend` is an object or registered protocol symbol. The same symbols are
+valid as a `vox-selection` default, which has no model slot; use a directory pair
+to choose a model. The picker lists only directory pairs and `cli`. Built-in
+`qwen` and `doubao` symbols use factory defaults; `cli` and other registered
+extensions retain their programmatic contracts. `vox-start` without a backend uses
+`vox-selection`; passing a model requires an explicit backend. Core and method
+lookup never consult global selection. The `vox-backend` struct and its accessors
+remain the configuration API.
 
 The Qwen adapter implements **Qwen-ASR-Realtime**, including
 `qwen3-asr-flash-realtime`. The separately documented
@@ -184,16 +223,17 @@ only when connecting, after endpoint approval; this is the explicit way to use a
 environment variable or another store:
 
 ```elisp
-(setq vox-backend
-      (vox-make-qwen "Custom credential source"
-        :key (lambda () (getenv "MY_ASR_KEY"))))
+(setq vox-backends
+      (list (vox-make-qwen "Custom credential source"
+              :key (lambda () (getenv "MY_ASR_KEY"))))
+      vox-selection nil)
 
-(setq vox-backend
-      (vox-make-qwen "Quick literal"
-        :key "sk-..."))
+(setq vox-backends
+      (list (vox-make-qwen "Quick literal" :key "sk-..."))
+      vox-selection nil)
 ```
 
-A literal key is visible in the initialization file, `C-h v vox-backend`, and any
+A literal key is visible in the initialization file, `C-h v vox-backends`, and any
 backtrace that prints the configuration; prefer auth-source or a function for a
 key you keep. `vox-api-key-from-auth-source` is the same lookup as the nil
 default, exposed for a different host or user:
@@ -202,21 +242,27 @@ default, exposed for a different host or user:
 Key results are checked for empty values and header control characters, and
 function errors are redacted. Backend/model configuration is copied before
 startup callbacks and the device picker. Editing the original object or selecting
-another model affects the next recording, not an active one. Canceling during
+another backend or model affects the next recording, not an active one. Canceling during
 credential acquisition tears down the pending session without opening transport
 afterward.
 
-**Direct migration:** remove uses of `vox-qwen-model`, `vox-qwen-endpoint`,
-`vox-doubao-endpoint`, `vox-doubao-resource-id`, and
-`vox-doubao-key-environment`. There are no compatibility aliases. Move their
-settings into the constructor and `vox-model`; use a `:key` function for a custom
-environment name. The `VOX_QWEN_API_KEY` / `VOX_DOUBAO_API_KEY` variables are no
-longer read; use auth-source or `:key (lambda () (getenv ...))`. Update your init
-and restart Emacs rather than mixing old loaded adapter definitions with the new
-configuration API. Audio-device, silence-detection, language/VAD, and packet-size
-options are unchanged. The self-recording CLI remains `(setq vox-backend 'cli)`
-and manages its own model. Built-in `qwen`/`doubao` registry symbols still select
-factory defaults, but custom API configuration uses objects.
+**Direct migration:** remove the `vox-backend` and `vox-model` variable settings
+and the `vox-select-model` command with `vox-model-history` from your
+configuration. Put backend objects in `vox-backends`, set `vox-selection`, and
+bind `vox-select`. A former `(setq vox-backend 'qwen)` (or any registered
+protocol symbol) becomes `(setq vox-selection 'qwen)`; object configurations move
+into the directory. These obsolete variables and commands have no compatibility
+aliases. The backend struct, constructors, accessors, and explicit backend/core
+APIs remain. Explicit core/method calls that previously relied on a global model
+must now pass their model argument.
+
+Also move former `vox-qwen-model`, `vox-qwen-endpoint`, `vox-doubao-endpoint`,
+`vox-doubao-resource-id`, and `vox-doubao-key-environment` settings into the
+constructor and selection. `VOX_QWEN_API_KEY` / `VOX_DOUBAO_API_KEY` are not read;
+use auth-source or an explicit `:key (lambda () (getenv ...))`. Update your init
+and restart Emacs to avoid mixing loaded old definitions with the new API.
+Audio-device, silence-detection, language/VAD, and packet-size options are
+unchanged. The CLI uses `(setq vox-selection 'cli)` and manages its own model.
 
 ## Credentials and regions
 
@@ -247,11 +293,11 @@ Qwen defaults to the Beijing public endpoint and model
 `qwen3-asr-flash-realtime`. It is a VAD-only adapter. For Singapore:
 
 ```elisp
-(setq vox-backend
-      (vox-make-qwen "DashScope Singapore"
-        :host "dashscope-intl.aliyuncs.com"
-        :models '(qwen3-asr-flash-realtime))
-      vox-model 'qwen3-asr-flash-realtime)
+(setq vox-backends
+      (list (vox-make-qwen "DashScope Singapore"
+              :host "dashscope-intl.aliyuncs.com"
+              :models '(qwen3-asr-flash-realtime)))
+      vox-selection '("DashScope Singapore" qwen3-asr-flash-realtime))
 ```
 
 Confirm model availability, account permissions, region, and business-space
@@ -263,11 +309,11 @@ verification are not disabled.
 ### Doubao (experimental)
 
 ```elisp
-(setq vox-backend
-      (vox-make-doubao "SeedASR"
-        :models '(bigmodel)
-        :resource-id "volc.seedasr.sauc.duration")
-      vox-model 'bigmodel
+(setq vox-backends
+      (list (vox-make-doubao "SeedASR"
+              :models '(bigmodel)
+              :resource-id "volc.seedasr.sauc.duration"))
+      vox-selection '("SeedASR" bigmodel)
       vox-doubao-second-pass t
       vox-doubao-chunk-ms 200)
 ```
@@ -464,7 +510,7 @@ Custom endpoints therefore remain a trust decision.
 ## Optional CLI backend
 
 ```elisp
-(setq vox-backend 'cli
+(setq vox-selection 'cli
       vox-cli-command '("/absolute/path/to/your-streaming-asr" "--ndjson"))
 ```
 

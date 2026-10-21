@@ -23,10 +23,12 @@
 (require 'vox-backend-cli)
 
 ;;;###autoload
-(defun vox-start (&optional backend sink)
-  "Start BACKEND (default `vox-backend') using SINK or a buffer sink.
-The recording captures `vox-model' (or the backend's first model);
-`vox-core-start' accepts an explicit model for one call.
+(defun vox-start (&optional backend sink model)
+  "Start the current `vox-selection', using SINK or a buffer sink.
+An explicit BACKEND object or registered symbol bypasses `vox-selection'
+and `vox-backends'; MODEL then selects its model (nil means its first).
+MODEL requires an explicit BACKEND.  Configuration and model are copied
+before callbacks or device prompting.
 SINK is a plist of :on-preview, :on-finish, :on-state, :on-error functions.
 It receives the captured session, never the callback's current buffer.
 For a headless session with no sink use `vox-core-start' directly.
@@ -37,11 +39,17 @@ nil.  Programmatic calls require explicit input configuration and do not prompt.
   (when (vox-current-session) (user-error "A Vox session is already active"))
   (when buffer-read-only
     (unless sink (user-error "Vox target buffer is read-only")))
-  (let ((selected-backend (vox-backend-snapshot (or backend vox-backend)))
-        (selected-model (if (stringp vox-model) (copy-sequence vox-model) vox-model))
-        (interactivep (called-interactively-p 'interactive))
-        (target (current-buffer))
-        (marker (copy-marker (point) t)))
+  (when (and model (null backend))
+    (user-error "An explicit Vox model requires an explicit backend"))
+  (let* ((resolved (if backend
+                       (cons (vox-backend-snapshot backend)
+                             (if (stringp model) (copy-sequence model) model))
+                     (vox--resolve-selection)))
+         (selected-backend (car resolved))
+         (selected-model (cdr resolved))
+         (interactivep (called-interactively-p 'interactive))
+         (target (current-buffer))
+         (marker (copy-marker (point) t)))
     (unwind-protect
         (progn
           (when (plist-get (vox-backend-methods selected-backend selected-model) :needs-external-audio)
@@ -64,37 +72,62 @@ nil.  Programmatic calls require explicit input configuration and do not prompt.
                             target marker selected-model)))
       (set-marker marker nil))))
 
-(defvar vox-model-history nil
-  "Minibuffer history of models chosen with `vox-select-model'.")
+(defvar vox-selection-history nil
+  "Minibuffer history of backend/model pairs chosen with `vox-select'.")
+
+(defvar vox--selection-revision 0
+  "Successful picker revision, used to reject superseded prompts.")
 
 ;;;###autoload
-(defun vox-select-model ()
-  "Select an advertised model of `vox-backend' for the next recording.
-Change `vox-model' only; do not connect, read keys, or save configuration.
-An already active session retains its captured backend and model."
+(defun vox-select ()
+  "Select a backend/model pair for the next recording, or the CLI.
+Use only configured models from `vox-backends', with case-sensitive names.
+Registered protocol symbols other than `cli' are configured in Lisp, not
+offered here.  Set and return `vox-selection'.  Do not connect, read keys or
+save settings.  An active session retains its snapshot.  Quit and invalid or
+stale choices leave the current selection untouched, including changes by
+nested commands."
   (interactive)
-  (let* ((backend vox-backend)
-         (configuration (plist-get (vox-backend-methods backend nil) :configuration)))
-    (unless configuration (user-error "This Vox backend does not advertise ASR models"))
-    (let* ((models (vox-backend-models configuration))
-           (choice (completing-read "Vox ASR model: " models nil t nil
-                                    'vox-model-history))
-           (model (car (member choice models))))
-      (when (and (null model) completion-ignore-case)
-        (let ((matches (cl-remove-if-not
-                        (lambda (candidate)
-                          (eq t (compare-strings choice nil nil candidate nil nil t)))
-                        models)))
-          (when (> (length matches) 1)
-            (user-error "Ambiguous ASR model; choose a candidate with its exact case"))
-          (setq model (car matches))))
-      (unless model (user-error "No ASR model selected"))
-      (unless (eq backend vox-backend)
-        (user-error "Vox backend changed during model selection; try again"))
-      (vox-backend-methods backend model)
-      (setq vox-model (copy-sequence model))
-      (message "Vox model set to %s for the next recording" model)
-      vox-model)))
+  (let* ((candidates (vox--backend-candidates))
+         (snapshots (mapcar (lambda (entry) (vox-backend-snapshot (cdr entry)))
+                            candidates))
+         (previous vox-selection)
+         (previous-copy (vox--backend-copy-tree previous))
+         (revision vox--selection-revision)
+         (completion-ignore-case nil)
+         (choices
+          (append
+           (cl-mapcan
+            (lambda (configuration)
+              (mapcar (lambda (model)
+                        (let ((name (vox-backend-name configuration)))
+                          (cons (format "%S / %S" name model) (list name model))))
+                      (vox-backend-models configuration)))
+            snapshots)
+           (list (cons "cli (no remote model)" 'cli))))
+         (choice (completing-read "Vox backend / model: " choices nil t nil
+                                  'vox-selection-history))
+         (selected (cdr (assoc choice choices))))
+    (unless selected (user-error "No Vox backend/model pair selected"))
+    ;; Completion may run nested commands or mutate objects and strings in place.
+    (unless (and (= revision vox--selection-revision)
+                 (eq previous vox-selection)
+                 (equal previous-copy vox-selection)
+                 (let ((current (vox--backend-candidates)))
+                   (and (equal candidates current)
+                        (cl-every #'eq (mapcar #'cdr candidates) (mapcar #'cdr current))
+                        (equal snapshots
+                               (mapcar (lambda (entry) (vox-backend-snapshot (cdr entry)))
+                                       current)))))
+      (user-error "Vox configuration changed during selection; try again"))
+    ;; Validate protocol availability too, without invoking its methods.
+    (let* ((vox-selection selected)
+           (resolved (vox--resolve-selection)))
+      (vox-backend-methods (car resolved) (cdr resolved)))
+    (setq vox-selection (vox--backend-copy-tree selected))
+    (cl-incf vox--selection-revision)
+    (message "Vox selection set to %s for the next recording" choice)
+    vox-selection))
 
 ;;;###autoload
 (defun vox-stop ()

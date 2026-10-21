@@ -43,7 +43,7 @@
   ;; Default: auth-source for the connecting host; no environment lookup.
   (let* ((session (vox--make-session :id "credentials" :generation 1))
          (vox--active-session session)
-         (vox-model nil) headers queried)
+         (vox-selection nil) headers queried)
     (cl-letf (((symbol-function 'auth-source-search)
                (lambda (&rest args)
                  (setq queried (list (plist-get args :host)
@@ -64,7 +64,7 @@
                      :id "credentials" :generation 1
                      :methods (vox-backend-methods configuration)))
            (vox--active-session session)
-           (vox-model nil)
+           (vox-selection nil)
            headers)
       (cl-letf (((symbol-function 'auth-source-search)
                  (lambda (&rest _) (ert-fail "Explicit key consulted auth-source")))
@@ -78,7 +78,7 @@
   :tags '(vox-unit)
   (let* ((session (vox--make-session :id "missing" :generation 1))
          (vox--active-session session)
-         (vox-model nil) opened)
+         (vox-selection nil) opened)
     (cl-letf (((symbol-function 'auth-source-search) (lambda (&rest _) nil))
               ((symbol-function 'getenv)
                (lambda (&rest _) (ert-fail "Environment fallback used")))
@@ -129,7 +129,7 @@
 (ert-deftest vox-qwen-independent-configurations-and-captured-open-options ()
   :tags '(vox-unit)
   ;; Synthetic credentials and delayed fake transports; no provider access.
-  (let* ((vox-model nil)
+  (let* ((vox-selection nil)
          (vox-qwen-language "en") (vox-qwen-silence-ms 600)
          (key-calls 0)
          (first (vox-make-qwen
@@ -162,7 +162,7 @@
       (setq vox-qwen-language "ja" vox-qwen-silence-ms 900
             vox--active-session b)
       (vox-qwen-connect b #'ignore #'ignore #'ignore)
-      (setq vox-model 'invalid vox-qwen-language nil vox-qwen-silence-ms 200)
+      (setq vox-selection 'invalid vox-qwen-language nil vox-qwen-silence-ms 200)
       (should (= key-calls 2))
       (dolist (connection connections)
         (let* ((s (nth 0 connection)) (url (nth 1 connection))
@@ -195,7 +195,7 @@
 (ert-deftest vox-qwen-custom-host-consent-precedes-lazy-key ()
   :tags '(vox-unit)
   (dolist (approved '(nil t))
-    (let* ((vox-model nil) (noninteractive nil) order
+    (let* ((vox-selection nil) (noninteractive nil) order
            (backend (vox-make-qwen
                      "proxy" :host "qwen.example" :models '(proxy)
                      :key (lambda () (push 'key order) "synthetic-key")))
@@ -217,7 +217,7 @@
 
 (ert-deftest vox-qwen-custom-host-auth-source-uses-parsed-host ()
   :tags '(vox-unit)
-  (let* ((vox-model nil) (noninteractive nil)
+  (let* ((vox-selection nil) (noninteractive nil)
          (backend (vox-make-qwen "proxy" :host "qwen.example:9443"))
          (session (vox--make-session :generation 1
                                     :methods (vox-backend-methods backend)))
@@ -234,17 +234,25 @@
 
 (ert-deftest vox-qwen-invalid-model-never-resolves-key-or-opens-transport ()
   :tags '(vox-unit)
-  (let ((vox-model 'not-supported) calls)
+  (let* ((session (vox--make-session
+                   :generation 1 :state 'connecting
+                   :methods (list :configuration (vox-make-qwen "Invalid")
+                                  :model "not-supported")))
+         (vox--active-session session) calls)
     (cl-letf (((symbol-function 'vox-backend-secret)
                (lambda (&rest _) (push 'key calls)))
               ((symbol-function 'vox-transport-open)
                (lambda (&rest _) (push 'transport calls))))
-      (should-error (vox-qwen-connect (vox--make-session) #'ignore #'ignore #'ignore))
+      (let ((err (should-error
+                  (vox-qwen-connect session #'ignore #'ignore #'ignore)
+                  :type 'user-error)))
+        (should (string-match-p "Vox model not-supported is not configured"
+                                (error-message-string err))))
       (should-not calls))))
 
 (ert-deftest vox-qwen-stale-session-never-resolves-key-or-opens-transport ()
   :tags '(vox-unit)
-  (let ((vox--active-session nil) (vox-model nil) calls
+  (let ((vox--active-session nil) (vox-selection nil) calls
         (session (vox--make-session :id "stale" :generation 1)))
     (cl-letf (((symbol-function 'vox-backend-secret)
                (lambda (&rest _) (push 'key calls)))
@@ -311,7 +319,7 @@
   :tags '(vox-unit)
   (dolist (boundary '(approval key))
     (let* ((vox--active-session nil) (vox--last-session nil)
-           (vox-model nil) (noninteractive nil) order opened
+           (vox-selection nil) (noninteractive nil) order opened
            (backend (vox-make-qwen
                      "cancel" :host "qwen.example"
                      :key (lambda ()

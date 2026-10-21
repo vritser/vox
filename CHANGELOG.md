@@ -4,6 +4,22 @@
 
 ### Added
 
+- **Unified backend/model selection (breaking):** `vox-backends` is the named
+  candidate directory, defaulting to Qwen. `vox-selection` is the single choice:
+  nil uses the first backend/model, `(NAME nil)` uses that backend's first model,
+  `(NAME MODEL)` selects an allowed symbol/string model, and a registered
+  protocol symbol such as `cli`, `qwen`, `doubao`, or an extension selects that
+  backend without a model choice. `vox-select` shows directory pairs in one
+  offline completion list. Missing names, unregistered symbols, duplicate names,
+  invalid models, and stale prompts fail without fallback or overwriting newer
+  choices; one malformed directory entry blocks every directory selection until
+  it is fixed. Active sessions retain their snapshots. The old `vox-backend` /
+  `vox-model` variables and the `vox-select-model` picker with
+  `vox-model-history` are removed; the backend struct/accessors remain. Explicit
+  backend/core calls default to their backend's first model and accept an
+  explicit model argument independently of global selection
+  (rationale: [postmortem 008](postmortems/008-unified-selection.md)).
+
 - **Clickable mode-line icon:** a persistent microphone icon at the end of the
   mode line starts or stops recording with a mouse click. Vox appends
   `vox-mode-line-construct` to `global-mode-string`; insert that construct into
@@ -37,16 +53,14 @@
   reads no environment variables itself, and `vox-secret` is removed. Use
   `:key (lambda () (getenv "..."))` to keep an environment lookup explicit.
   `vox-api-key-from-auth-source` remains for an explicit host or user. A literal
-  key is visible in the initialization file and `C-h v vox-backend`.
+  key is visible in the initialization file and `C-h v vox-backends`.
   (rationale: [postmortem 004](postmortems/004-key-sources.md)).
 
 - **Backend objects and model selection (breaking configuration change):**
   `vox-make-qwen` / `vox-make-doubao` group host, endpoint, available models,
-  deferred key source and provider resource options. `vox-backend` selects the
-  object; `vox-model` or `vox-select-model` chooses a configured model. The former
-  provider API/model globals are removed without aliases; `vox-backend` itself is
-  now a plain variable rather than a Customize option, though `setq`, `:custom`,
-  and saved settings still apply it. Configuration is
+  deferred key source and provider resource options. Objects now live in
+  `vox-backends`; `vox-selection` and `vox-select` choose a backend/model pair.
+  Former provider API/model globals are removed without aliases. Configuration is
   captured per session and before device prompting; custom Qwen URLs honor the
   selected model. Endpoint approval precedes key lookup, and cancellation during
   approval or key callbacks cannot open a stale connection. See the migration

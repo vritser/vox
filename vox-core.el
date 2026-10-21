@@ -183,9 +183,10 @@ REASON is an optional fixed event-log category; MESSAGE is never logged."
           (error (vox-core-fail session "Vox callback failed; session safely stopped" 'callback)))
       (vox-log-event generation 'stale-callback :state (vox-session-state session)))))
 
-(cl-defun vox-core-start (backend sink &optional buffer marker (model vox-model))
+(defun vox-core-start (backend sink &optional buffer marker model)
   "Start BACKEND with SINK, capturing BUFFER and MARKER as output ownership.
-MODEL defaults to `vox-model'; explicit nil selects the backend's first model.
+MODEL omitted or nil selects the backend's first model, independently of
+`vox-selection'.  An explicit symbol/string selects an allowed model.
 Backend configuration and model are captured before callbacks or connection.
 A nil SINK is supported for headless callers.  MARKER is copied and follows
 text typed at the original insertion point.  Return the new session."

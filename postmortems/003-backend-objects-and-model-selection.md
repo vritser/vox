@@ -6,6 +6,8 @@ _Date: 2026-10-20. Status: Implemented, uncommitted work based on `3afd60c`._
 > accepts a literal string and the default reads auth-source only, with no
 > environment fallback.
 
+> Selection workflow superseded by [008](008-unified-selection.md).
+
 ## Background
 
 Provider API addresses, models and credential-source settings were spread across

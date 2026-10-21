@@ -135,16 +135,75 @@ resource.
    (vox--make-backend :name name :type 'doubao :host host :endpoint endpoint
                       :models models :key key :resource-id resource-id)))
 
-(defvar vox-backend (vox-make-qwen "Qwen")
-  "Backend configuration object or registered backend symbol to use.
-Set this in Lisp initialization code with `vox-make-qwen' or `vox-make-doubao',
-or to `cli' for the self-recording CLI.  This is a plain variable, not a
-Customize option; use `vox-model' or `vox-select-model' for the model.")
+(defvar vox-backends (list (vox-make-qwen "Qwen"))
+  "Directory of backend objects, in default and completion order.
+Configure with `vox-make-qwen' or `vox-make-doubao'.  Names must be unique,
+case-sensitive strings.  This is separate from the protocol registry.")
 
-(defcustom vox-model nil
-  "Selected model ID, as a symbol or string, or nil for the backend's first model."
-  :type '(choice (const :tag "First backend model" nil) string symbol)
-  :group 'vox)
+(defvar vox-selection nil
+  "Backend/model choice for the next recording.
+Nil uses the first of `vox-backends' and its first model.  A two-element
+list (NAME MODEL) selects the backend named NAME; MODEL is nil for its
+first model, or an allowed symbol/string ID.  A registered protocol symbol
+selects that backend without a model choice: `cli', the built-in `qwen' /
+`doubao' factory defaults, or an extension from `vox-register-backend'.
+Use `vox-select' interactively.  Missing names, unregistered symbols, and
+invalid models are errors, never fallback requests.")
+
+(defun vox--resolve-selection ()
+  "Return a detached (BACKEND . MODEL) resolved from `vox-selection'.
+A directory entry yields a validated copy and model string; a registered
+protocol symbol yields that symbol with no model.  Validate the directory,
+registration, and model without callbacks or credential access."
+  (cond
+   ((null vox-selection)
+    (let* ((candidates (vox--backend-candidates))
+           (configuration (vox-backend-snapshot (cdr (car candidates)))))
+      (cons configuration (vox--backend-model configuration nil))))
+   ((symbolp vox-selection)
+    (unless (gethash vox-selection vox--backends)
+      (user-error "Vox backend %s is not registered; update vox-selection"
+                  vox-selection))
+    (cons vox-selection nil))
+   ((and (proper-list-p vox-selection)
+         (= (length vox-selection) 2)
+         (stringp (car vox-selection)))
+    (let* ((candidates (vox--backend-candidates))
+           (entry (assoc (car vox-selection) candidates)))
+      (unless entry
+        (user-error
+         "Vox backend name is missing from vox-backends; update vox-selection"))
+      (let ((configuration (vox-backend-snapshot (cdr entry))))
+        (cons configuration
+              (vox--backend-model configuration (cadr vox-selection))))))
+   (t
+    (user-error
+     "Invalid vox-selection; use nil, (NAME MODEL), or a registered backend symbol"))))
+
+(defun vox--backend-candidates ()
+  "Return a validated name-to-object alist for `vox-backends'.
+Copy names for completion, retaining the original objects as values.
+Reject non-object and duplicate entries without resolving credentials.
+Report failing entry positions so one broken entry is easy to find."
+  (unless (and (consp vox-backends) (proper-list-p vox-backends))
+    (user-error "Configure vox-backends with a nonempty list of backend objects"))
+  (let (candidates (index 0))
+    (dolist (backend vox-backends)
+      (cl-incf index)
+      (unless (vox-backend-p backend)
+        (user-error "vox-backends entry %d must be a backend object" index))
+      (let ((name (condition-case err
+                      (vox-backend-name (vox-backend-snapshot backend))
+                    (user-error
+                     (user-error "Invalid vox-backends entry %d: %s"
+                                 index (error-message-string err))))))
+        (let ((earlier (assoc name candidates)))
+          (when earlier
+            (user-error
+             "Duplicate Vox backend name: %s (entries %d and %d); use unique names in vox-backends"
+             name (1+ (cl-position earlier candidates :test #'eq)) index)))
+        (push (cons name backend) candidates)))
+    (nreverse candidates)))
 
 (defun vox--backend-model (configuration model)
   "Resolve MODEL against validated CONFIGURATION's allowed models."
@@ -157,13 +216,13 @@ Customize option; use `vox-model' or `vox-select-model' for the model.")
        selected))
     selected))
 
-(defun vox--backend-copy-methods (value)
-  "Copy method metadata VALUE while preserving function identity."
+(defun vox--backend-copy-tree (value)
+  "Copy VALUE recursively while preserving function identity."
   (cond ((functionp value) value)
         ((stringp value) (copy-sequence value))
-        ((consp value) (cons (vox--backend-copy-methods (car value))
-                             (vox--backend-copy-methods (cdr value))))
-        ((vectorp value) (apply #'vector (mapcar #'vox--backend-copy-methods value)))
+        ((consp value) (cons (vox--backend-copy-tree (car value))
+                             (vox--backend-copy-tree (cdr value))))
+        ((vectorp value) (apply #'vector (mapcar #'vox--backend-copy-tree value)))
         (t value)))
 
 (defun vox-register-backend (name methods)
@@ -183,9 +242,10 @@ plist unchanged."
     (error "External-audio backend requires :send-pcm"))
   (puthash name methods vox--backends))
 
-(cl-defun vox-backend-methods (backend &optional (model vox-model))
+(defun vox-backend-methods (backend &optional model)
   "Return fresh registered methods for BACKEND, capturing selected MODEL.
-MODEL defaults to `vox-model'.  Configuration objects and built-in protocol
+MODEL defaults to nil (the backend's first model), independently of
+`vox-selection'.  Configuration objects and built-in protocol
 symbols carry a validated detached :configuration and a copied :model string.
 Other registered symbols ignore MODEL.  This operation never resolves
 credentials."
@@ -196,7 +256,7 @@ credentials."
          (type (if configuration (vox-backend-type configuration) backend))
          (registered (and (symbolp type) (gethash type vox--backends))))
     (unless registered (user-error "Unknown Vox backend"))
-    (let ((methods (vox--backend-copy-methods registered)))
+    (let ((methods (vox--backend-copy-tree registered)))
       (when configuration
         (setq methods (plist-put methods :configuration configuration)
               methods (plist-put methods :model

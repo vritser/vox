@@ -123,7 +123,7 @@
 
 (ert-deftest vox-doubao-config-selected-model-is-explicit ()
   :tags '(vox-unit)
-  (let ((vox-model 'unrelated))
+  (let ((vox-selection 'unrelated))
     (should (equal (plist-get (plist-get (vox-doubao-config) :request) :model_name)
                    "bigmodel"))
     (should (equal (plist-get (plist-get (vox-doubao-config "selected") :request)
@@ -135,7 +135,7 @@
   ;; Default: auth-source for the connecting host; no environment lookup.
   (let* ((session (vox--make-session :id "credentials" :generation 1))
          (vox--active-session session)
-         (vox-model nil)
+         (vox-selection nil)
          headers queried)
     (cl-letf (((symbol-function 'zlib-available-p) (lambda () t))
               ((symbol-function 'auth-source-search)
@@ -157,7 +157,7 @@
                      :id "credentials" :generation 1
                      :methods (vox-backend-methods configuration)))
            (vox--active-session session)
-           (vox-model nil)
+           (vox-selection nil)
            headers)
       (cl-letf (((symbol-function 'zlib-available-p) (lambda () t))
                 ((symbol-function 'auth-source-search)
@@ -172,7 +172,7 @@
   :tags '(vox-unit)
   (let* ((session (vox--make-session :id "missing" :generation 1))
          (vox--active-session session)
-         (vox-model nil) opened)
+         (vox-selection nil) opened)
     (cl-letf (((symbol-function 'zlib-available-p) (lambda () t))
               ((symbol-function 'auth-source-search) (lambda (&rest _) nil))
               ((symbol-function 'getenv)
@@ -244,7 +244,7 @@
 (ert-deftest vox-doubao-independent-configurations-and-captured-open-options ()
   :tags '(vox-unit)
   ;; Synthetic credentials and delayed fake transports; no provider access.
-  (let* ((vox-model nil) (vox-doubao-second-pass t) (key-calls 0)
+  (let* ((vox-selection nil) (vox-doubao-second-pass t) (key-calls 0)
          (first (vox-make-doubao
                  "first" :models '(base selected) :resource-id "resource.first"
                  :endpoint "/custom?feature=one"
@@ -279,7 +279,7 @@
       (vox-doubao-connect a #'ignore #'ignore #'ignore)
       (setq vox-doubao-second-pass nil vox--active-session b)
       (vox-doubao-connect b #'ignore #'ignore #'ignore)
-      (setq vox-model 'invalid vox-doubao-second-pass t)
+      (setq vox-selection 'invalid vox-doubao-second-pass t)
       (should (= key-calls 2))
       (dolist (connection connections)
         (let ((first-p (eq (car connection) a)))
@@ -302,7 +302,7 @@
 (ert-deftest vox-doubao-custom-host-consent-precedes-lazy-key ()
   :tags '(vox-unit)
   (dolist (approved '(nil t))
-    (let* ((vox-model nil) (noninteractive nil) order
+    (let* ((vox-selection nil) (noninteractive nil) order
            (backend (vox-make-doubao
                      "proxy" :host "doubao.example" :models '(proxy)
                      :key (lambda () (push 'key order) "synthetic-key")))
@@ -324,7 +324,7 @@
 
 (ert-deftest vox-doubao-custom-host-auth-source-uses-parsed-host ()
   :tags '(vox-unit)
-  (let* ((vox-model nil) (noninteractive nil)
+  (let* ((vox-selection nil) (noninteractive nil)
          (backend (vox-make-doubao "proxy" :host "doubao.example:9443"))
          (session (vox--make-session :generation 1
                                     :methods (vox-backend-methods backend)))
@@ -341,17 +341,25 @@
 
 (ert-deftest vox-doubao-invalid-model-never-resolves-key-or-opens-transport ()
   :tags '(vox-unit)
-  (let ((vox-model 'not-supported) calls)
+  (let* ((session (vox--make-session
+                   :generation 1 :state 'connecting
+                   :methods (list :configuration (vox-make-doubao "Invalid")
+                                  :model "not-supported")))
+         (vox--active-session session) calls)
     (cl-letf (((symbol-function 'vox-backend-secret)
                (lambda (&rest _) (push 'key calls)))
               ((symbol-function 'vox-transport-open)
                (lambda (&rest _) (push 'transport calls))))
-      (should-error (vox-doubao-connect (vox--make-session) #'ignore #'ignore #'ignore))
+      (let ((err (should-error
+                  (vox-doubao-connect session #'ignore #'ignore #'ignore)
+                  :type 'user-error)))
+        (should (string-match-p "Vox model not-supported is not configured"
+                                (error-message-string err))))
       (should-not calls))))
 
 (ert-deftest vox-doubao-stale-session-never-resolves-key-or-opens-transport ()
   :tags '(vox-unit)
-  (let ((vox--active-session nil) (vox-model nil) calls
+  (let ((vox--active-session nil) (vox-selection nil) calls
         (session (vox--make-session :id "stale" :generation 1)))
     (cl-letf (((symbol-function 'zlib-available-p) (lambda () t))
               ((symbol-function 'vox-backend-secret)
@@ -398,7 +406,7 @@
   :tags '(vox-unit)
   (dolist (boundary '(approval key))
     (let* ((vox--active-session nil) (vox--last-session nil)
-           (vox-model nil) (noninteractive nil) order opened
+           (vox-selection nil) (noninteractive nil) order opened
            (backend (vox-make-doubao
                      "cancel" :host "doubao.example"
                      :key (lambda ()

@@ -7,8 +7,8 @@ root; the development layout does not add a runtime dependency or change the API
 
 | Module | Owns |
 | --- | --- |
-| [vox.el](../vox.el) | Public commands, model selection, explicit transcript recovery |
-| [vox-backend.el](../vox-backend.el) | Backend objects/factories, default configuration and model selection data, registration/contracts, JSON helpers, lazy credentials, endpoint validation |
+| [vox.el](../vox.el) | Public commands, `vox-select` pair completion and reentry checks, explicit transcript recovery |
+| [vox-backend.el](../vox-backend.el) | Backend objects/factories, `vox-backends` directory and `vox-selection` resolution, registration/contracts, JSON helpers, lazy credentials, endpoint validation |
 | [vox-core.el](../vox-core.el) | Session lifecycle, callback generations, transcript reconciliation, PCM queue/chunker, automatic stop requests, completion and cleanup |
 | [vox-log.el](../vox-log.el) | Opt-in bounded event metadata, strict safe-field schema, in-memory snapshots and explicit clearing |
 | [vox-activity.el](../vox-activity.el) | Pure bounded PCM energy analysis, 20 ms windows, speech arming and quiet-duration eligibility; no timers, I/O, or transcript decisions |
@@ -63,6 +63,12 @@ public commands -> session core -> backend contract -> provider / CLI
   an explicit save request. Startup captures its target buffer/marker and backend
   before completion, then rechecks ownership/editability afterward. Programmatic
   startup and self-recording CLI do not prompt for devices.
+- `vox-selection` is the sole next-session choice: nil resolves the first directory
+  entry/model, a name/model pair resolves exactly, and a registered protocol symbol
+  resolves that backend with no model choice. Directory names are unique and a
+  malformed entry blocks every resolution. Explicit backend/core APIs bypass this
+  selection. Completion validates snapshots and rejects reentrant configuration
+  changes without overwriting newer choices; it never connects or reads credentials.
 - Backend factories are pure configuration construction. Core captures a detached
   backend object and selected model in method metadata before state callbacks;
   public startup also snapshots them before the device picker. Key functions stay

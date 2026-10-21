@@ -66,24 +66,28 @@ after the quiet interval; 1.2 seconds is not a deadline for text insertion.
 
 ## Backends and models
 
-Configure the API and available models together, using a gptel-style backend
-object (gptel is not a dependency):
+Configure named backend objects in `vox-backends`, then use `M-x vox-select`
+to choose a backend/model pair for the next recording:
 
 ```elisp
-(setq vox-backend
-      (vox-make-qwen "DashScope"
-        :host "dashscope.aliyuncs.com"
-        :endpoint "/api-ws/v1/realtime"
-        :models '(qwen3-asr-flash-realtime)))
+(setq vox-backends
+      (list (vox-make-qwen "DashScope")
+            (vox-make-doubao "SeedASR")))
+(setq vox-selection '("SeedASR" bigmodel))
 ```
 
-`vox-model` defaults to nil, meaning the first configured model. Set it to a
-configured model ID or use `M-x vox-select-model`. Backend/model choices are
-captured per recording; switching does not alter an active session. The
-[configuration guide](docs/customization.md#backends-and-models) covers Doubao,
-custom credential functions, custom endpoints, and migration from the removed
-provider API/model globals. This configures existing native ASR protocols; it
-does not make arbitrary OpenAI-compatible HTTP APIs supported.
+`vox-selection` defaults to nil: the first backend and its first model. The
+built-in directory contains Qwen. `("SeedASR" nil)` selects SeedASR's first
+model; an explicit model may be a symbol or string. A registered protocol symbol
+selects that backend without a model choice: `'cli` for the optional
+self-recording CLI, `'qwen` / `'doubao` for factory defaults, or an extension
+registered with `vox-register-backend`. Missing backend names, unregistered
+symbols, and invalid models are errors; a malformed directory entry blocks
+directory selection until it is fixed. Active sessions retain their captured
+configuration. See the
+[configuration guide](docs/customization.md#backends-and-models) for endpoints,
+credentials, programmatic APIs, and migration. These objects configure existing
+native ASR protocols; arbitrary OpenAI-compatible HTTP APIs need their own adapter.
 
 ## API key configuration
 
@@ -92,17 +96,19 @@ By default Vox reads `auth-source` for the host being connected, using login
 `:key` to use a literal key or another source:
 
 ```elisp
-;; Literal key (visible in your init file and in `C-h v vox-backend')
-(setq vox-backend (vox-make-qwen "DashScope" :key "sk-..."))
+;; Literal key (visible in your init file and in `C-h v vox-backends')
+(setq vox-backends (list (vox-make-qwen "DashScope" :key "sk-..."))
+      vox-selection nil)
 
 ;; Any other source, including the environment
-(setq vox-backend
-      (vox-make-qwen "DashScope"
-        :key (lambda () (getenv "MY_ASR_KEY"))))
+(setq vox-backends
+      (list (vox-make-qwen "DashScope"
+              :key (lambda () (getenv "MY_ASR_KEY"))))
+      vox-selection nil)
 ```
 
 A literal key is convenient for a quick trial, but it is visible in your
-configuration, `C-h v vox-backend`, and any backtrace that prints the backend.
+configuration, `C-h v vox-backends`, and any backtrace that prints the backend.
 Prefer auth-source or a function for a key you keep.
 
 | Backend / region | `auth-source` host |
@@ -118,14 +124,15 @@ masked prompt. The key stays in the backend object for this session and is not
 written to a file:
 
 ```elisp
-(setq vox-backend
-      (vox-make-qwen "DashScope"
-        :key (read-passwd "DashScope API key: ")))
+(setq vox-backends
+      (list (vox-make-qwen "DashScope"
+              :key (read-passwd "DashScope API key: ")))
+      vox-selection nil)
 ```
 
 For Doubao, construct `(vox-make-doubao "SeedASR")` the same way and check its
 [resource ID and experimental status](docs/customization.md#doubao-experimental).
-`C-h v vox-backend` reveals the key, so replace or clear it when you are done.
+`C-h v vox-backends` reveals the key, so replace or clear it when you are done.
 
 ### Keep a key across restarts (recommended)
 
@@ -162,7 +169,7 @@ bindings enabled when Vox loads.
 
 | Key / command | Action |
 | --- | --- |
-| `M-x vox-select-model` | Choose a configured ASR model for the next recording |
+| `M-x vox-select` | Choose a configured backend/model pair or CLI for the next recording |
 | `M-x vox-select-input-device` | Choose an input; prefix `C-u` saves through Customize |
 | `C-c v` / `M-x vox-toggle` | Start when idle, stop when recording; otherwise report status |
 | `C-c C-v` / `M-x vox-cancel` | Discard the session without inserting text |
