@@ -19,6 +19,7 @@ root; the development layout does not add a runtime dependency or change the API
 | [vox-backend-doubao.el](../vox-backend-doubao.el) | Experimental Doubao binary/gzip protocol, snapshot events, final packet |
 | [vox-backend-cli.el](../vox-backend-cli.el) | Trusted external process, NDJSON v1 framing and explicit completion/exit contract |
 | [vox-ui.el](../vox-ui.el) | Preview overlay and captured-buffer sink, read-only checks, one undoable insertion |
+| [vox-reload.el](../vox-reload.el) | Idle-only source reload, dependency/read preflight, keymap refresh and mode-line cache invalidation |
 | [vox-pkg.el](../vox-pkg.el) | Emacs package descriptor |
 
 ## Boundaries
@@ -79,6 +80,10 @@ public commands -> session core -> backend contract -> provider / CLI
   before asynchronous transport opening. Model selection affects future sessions.
 - Loading Vox is silent and does not start capture or connect. Backend registration
   is package setup, not permission to send audio.
+- Source reload refuses active ownership, pending startup and device interaction.
+  Core/public startup and device discovery refuse reentry while reload is active.
+  Exact source loads preserve settings, session generations and retained history;
+  they do not migrate structures, unload definitions, or restart sessions.
 - Event logging is disabled by default. Its input boundary accepts fixed event
   names/enums and bounded integers only, never raw provider data, text, PCM,
   credentials or configuration strings. A bounded ring stores memory-only lines;

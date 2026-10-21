@@ -21,6 +21,7 @@
 (require 'vox-backend-qwen)
 (require 'vox-backend-doubao)
 (require 'vox-backend-cli)
+(require 'vox-reload)
 
 ;;;###autoload
 (defun vox-start (&optional backend sink model)
@@ -36,12 +37,14 @@ Vox-owned recordings stop after silence by default; see `vox-stop-mode'.
 An interactive start prompts for an input device when `vox-audio-input' is
 nil.  Programmatic calls require explicit input configuration and do not prompt."
   (interactive)
+  (when vox--reloading (user-error "Wait for Vox reload to finish before starting"))
   (when (vox-current-session) (user-error "A Vox session is already active"))
   (when buffer-read-only
     (unless sink (user-error "Vox target buffer is read-only")))
   (when (and model (null backend))
     (user-error "An explicit Vox model requires an explicit backend"))
-  (let* ((resolved (if backend
+  (let* ((vox--starting t)
+         (resolved (if backend
                        (cons (vox-backend-snapshot backend)
                              (if (stringp model) (copy-sequence model) model))
                      (vox--resolve-selection)))

@@ -28,6 +28,7 @@ native permission prompts; quit aborts discovery without changing input."
 
 (defun vox-device--check-idle ()
   "Reject device changes while any Vox session owns the recorder lifecycle."
+  (when vox--reloading (user-error "Wait for Vox reload to finish before selecting an input"))
   (when (vox-current-session)
     (user-error "Stop or cancel the active Vox session before selecting an input")))
 

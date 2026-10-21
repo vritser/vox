@@ -62,6 +62,10 @@ threshold can mistake soft speech for silence.  Settings are captured at start."
 (defvar vox--active-session nil)
 (defvar vox--last-session nil)
 (defvar vox--generation 0)
+(defvar vox--reloading nil
+  "Non-nil while source reload excludes new sessions and device discovery.")
+(defvar vox--starting nil
+  "Non-nil while startup may hold definitions or configuration across callbacks.")
 
 (declare-function vox-audio-start "vox-audio" (session on-bytes on-ended on-error))
 (declare-function vox-audio-stop "vox-audio" (session))
@@ -190,6 +194,7 @@ MODEL omitted or nil selects the backend's first model, independently of
 Backend configuration and model are captured before callbacks or connection.
 A nil SINK is supported for headless callers.  MARKER is copied and follows
 text typed at the original insertion point.  Return the new session."
+  (when vox--reloading (user-error "Wait for Vox reload to finish before starting"))
   (when vox--active-session (user-error "A Vox session is already active"))
   (unless (and (memq vox-stop-mode '(silence manual))
                (cl-every (lambda (limit) (and (integerp limit) (> limit 0)))
@@ -200,7 +205,8 @@ text typed at the original insertion point.  Return the new session."
                (> vox-connect-timeout 0) (> vox-stop-timeout 0)
                (> vox-max-session-seconds 0) (> vox-preview-interval 0))
     (user-error "Invalid Vox limits"))
-  (let* ((target (or buffer (current-buffer)))
+  (let* ((vox--starting t)
+         (target (or buffer (current-buffer)))
          ;; Capture output ownership before a callable backend option runs.
          (position (if marker marker (with-current-buffer target (point))))
          (methods (copy-sequence (vox-backend-methods backend model)))

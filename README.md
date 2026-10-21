@@ -177,6 +177,7 @@ bindings enabled when Vox loads.
 | `M-x vox-show-transcript` | Display current/last in-memory text; unfinished text is UNCONFIRMED |
 | `M-x vox-copy-confirmed-text` | Explicitly copy confirmed/final text to the kill ring |
 | `M-x vox-forget-transcript` | Forget the last session and remove the recovery buffer |
+| `M-x vox-reload` | Reload local source while idle, preserving settings and history ([guide](docs/development.md#reload-without-restarting-emacs)) |
 | `M-x vox-toggle-event-log` / `M-x vox-show-event-log` | Enable safe event metadata and inspect recording rounds ([guide](docs/customization.md#event-log-for-repeated-recordings)) |
 
 Preview is an overlay, not buffer text. Switching buffers does not redirect the

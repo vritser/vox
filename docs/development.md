@@ -52,6 +52,49 @@ it fails preflight rather than silently skipping dependency coverage. Direct ERT
 runs can skip genuinely unavailable optional dependencies. The suite does not
 read cloud credentials or open a microphone.
 
+## Reload without restarting Emacs
+
+After updating this checkout, run `M-x vox-reload`. It reads all root-level Vox
+sources first, checks their top-level internal `require` dependencies, then loads
+them in dependency order using explicit `.el` paths. The package descriptor is
+excluded, and stale `.elc` files do not override the selected sources. This is
+similar to dsh-emacs's source reload, without depending on that package.
+
+If your running Emacs predates this command, first evaluate the following while
+Vox is idle (adjust the source path), then use `M-x vox-reload` for later updates:
+
+```elisp
+(load "/path/to/vox/vox-reload.el" nil t t)
+(vox-reload)
+```
+
+The default directory is the loaded package's source directory, not the current
+buffer's directory. Lisp callers can explicitly use `(vox-reload "/path/to/vox")`;
+only trusted local source directories are supported.
+
+- Finish with `vox-stop` and wait for completion, or explicitly discard with
+  `vox-cancel`, before reloading. Reload refuses any active session, pending
+  startup, device discovery/selection, active minibuffer or nested reload. It
+  never stops or restarts a recording on your behalf.
+- Settings, backend/model selection, input device, selection history, the last
+  transcript, event-log contents and generation counter remain intact. Custom
+  backend registrations under independent names survive; built-in registrations
+  (`qwen`, `doubao`, `cli`) refresh from source.
+- Functions and constants refresh. Package keymap defaults update in place,
+  replacing ad-hoc edits to those maps. Mode-line image caches are invalidated,
+  but user placement/removal of the indicator is preserved. Buffer text, point,
+  narrowing, transcript/log snapshots and user keybindings are not recreated.
+- This is not an unload or a state migration. Removed definitions remain
+  resident, and retained `defvar`/`defcustom` values do not reset to changed
+  defaults. Restart Emacs for struct-layout or state-initialization changes.
+- Read errors, missing internal source files and dependency cycles fail before
+  evaluation. Evaluation itself is not transactional: an error or quit can leave
+  some definitions updated. Fix the source and reload again, or restart Emacs.
+
+Source reload does not run the verification gate; run `scripts/verify.sh` before
+using edited code. It does not open a microphone, resolve credentials or start a
+provider connection. See [decision 011](../postmortems/011-idle-source-reload.md).
+
 ## Test ownership
 
 - `test/vox-test.el` is only the loader and batch runner.
@@ -112,7 +155,7 @@ in a fresh temporary staging directory. It derives `VERSION` from the header in
 name is not hard-coded. The tar is a multi-file Emacs package; use
 `M-x package-install-file` after making the `websocket` dependency available.
 The package descriptor, scripts and tests use `no-byte-compile` markers to avoid
-compiling development-only files during package installation. All nine runtime
+compiling development-only files during package installation. All runtime
 modules still compile normally and are checked strictly by the gate. Building an
 archive does not install it into your user profile. Generated archives are not
 source files.

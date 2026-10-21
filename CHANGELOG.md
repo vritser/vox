@@ -4,6 +4,15 @@
 
 ### Added
 
+- **Idle source reload:** `M-x vox-reload` reloads local Vox `.el` modules in
+  dependency order without restarting Emacs or using stale bytecode. Settings,
+  selection, custom backend names, the last transcript and event log survive;
+  keymap defaults and mode-line caches refresh without changing icon placement.
+  Active sessions, pending startup and device/minibuffer interactions must finish
+  first. Source-read/dependency failures precede evaluation; evaluation errors
+  can leave partial updates, and struct changes still require an Emacs restart
+  (rationale: [postmortem 011](postmortems/011-idle-source-reload.md)).
+
 - **Unified backend/model selection (breaking):** `vox-backends` is the named
   candidate directory, defaulting to Qwen. `vox-selection` is the single choice:
   nil uses the first backend/model, `(NAME nil)` uses that backend's first model,

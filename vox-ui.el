@@ -227,7 +227,7 @@ this construct into your own `mode-line-format'.")
         (vox-ui--mode-line-active vox--active-session))
        (t (vox-ui--mode-line-idle))))))
 
-(vox-ui--mode-line-place)
+(unless vox--reloading (vox-ui--mode-line-place))
 
 (defun vox-ui--mode-line-frames (color)
   "Return a motion-line sound-wave clip tinted COLOR, or nil."
