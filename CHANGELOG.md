@@ -10,8 +10,9 @@
   your own `mode-line-format` to place the icon elsewhere. While connecting,
   recording, draining, or finalizing, the target buffer's icon pulses four
   sound-wave phases; other buffers show a static active icon. Animation uses the
-  optional `motion-line` package; a one-cell glyph is the fallback. The icon
-  inherits the state face color. Customize `vox-mode-line` and
+  optional `motion-line` package; without it the icon stays on one static
+  sound-wave frame. A one-cell glyph is used when Emacs cannot render SVG. The
+  icon inherits the state face color. Customize `vox-mode-line` and
   `vox-mode-line-icon`.
 
 - **Opt-in event diagnostics:** `vox-toggle-event-log`, `vox-show-event-log` and

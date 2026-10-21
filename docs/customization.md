@@ -309,9 +309,10 @@ the end of the mode line. Clicking it starts or stops recording. While a
 session is connecting, recording, draining, or finalizing, the target buffer's
 icon animates four sound-wave phases pulsing outward on both sides; other
 buffers show a static active icon. Animation uses the optional `motion-line`
-package; without it, a one-cell glyph is shown. The icon inherits the state face
-color. Set `vox-mode-line` to nil to hide it; `vox-mode-line-icon` changes the
-fallback glyph.
+package; without it, the icon stays on one static sound-wave frame. A one-cell
+glyph is used when the display cannot render SVG. The icon inherits the state
+face color. Set `vox-mode-line` to nil to hide it; `vox-mode-line-icon` changes
+the fallback glyph.
 
 To place the icon somewhere else, remove `vox-mode-line-construct` from
 `global-mode-string` and insert it into your own `mode-line-format`.  For the
