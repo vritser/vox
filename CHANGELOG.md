@@ -127,6 +127,10 @@
 
 ### Fixed
 
+- **CI runner notices:** use the Node.js 24-based `actions/checkout@v6` and
+  pin the runner to Ubuntu 24.04, avoiding the checkout runtime deprecation
+  and automatic `ubuntu-latest` migration to Ubuntu 26.04.
+
 - **Mode-line SVG caching:** reuse the image returned by `create-image` while
   its color is unchanged, without requiring `imagep`. This keeps the icon
   within the supported Emacs 28.1+ API surface.
