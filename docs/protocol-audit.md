@@ -137,6 +137,10 @@ byte-for-byte equality to captured official frames.
 Both examples send the full request and await one server response before
 streaming audio. Vox waits for the first valid successful full response before
 calling ready, and does not accept an error or premature last response as ready.
+A successful response may carry only metadata, for example
+`result.additions.log_id`, before any transcript exists. Vox treats a missing
+`text` as readiness without a snapshot rather than replacing earlier text with
+an empty value; a present non-string `text` is still rejected.
 
 For live capture, Vox retains at most one PCM packet (maximum 6400 bytes) so the
 last real audio can carry flags 3 and a negative sequence. This adds at most one
@@ -171,6 +175,8 @@ Vox rejects unsupported types/flags/codecs, bad version/reserved bytes,
 truncation, trailing bytes, and oversized frames. One transport message must be
 one protocol packet; transport must reassemble WebSocket continuation frames.
 Concatenated independent protocol packets are rejected rather than guessed.
+The fixed envelope decodes into a `vox-doubao-packet` struct; the provider JSON
+body remains a plist because its fields are provider-owned and may grow.
 
 Source anchors:
 [Python parser](../test/fixtures/official-sauc-protocol.py#L233-L303),

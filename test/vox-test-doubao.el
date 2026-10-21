@@ -59,12 +59,13 @@
   (let ((ready (vox-doubao-decode (vox-doubao-test--fixture "doubao-ready.bin")))
         (partial (vox-doubao-decode (vox-doubao-test--fixture "doubao-partial.bin")))
         (final (vox-doubao-decode (vox-doubao-test--fixture "doubao-final.bin"))))
-    (should (= (plist-get ready :sequence) 1))
-    (should-not (plist-get ready :last-p))
+    (should (vox-doubao-packet-p ready))
+    (should (= (vox-doubao-packet-sequence ready) 1))
+    (should-not (vox-doubao-packet-last-p ready))
     (should (equal (plist-get (vox-doubao-normalize partial 1) :text) "Check emacs"))
-    (should (= (plist-get final :sequence) -3))
-    (should (= (plist-get final :event) 100))
-    (should (plist-get final :last-p))
+    (should (= (vox-doubao-packet-sequence final) -3))
+    (should (= (vox-doubao-packet-event final) 100))
+    (should (vox-doubao-packet-last-p final))
     (should (equal (vox-doubao-normalize final 2)
                    '(:type :snapshot :text "Check Emacs Lisp." :revision 2 :final-p t)))))
 
@@ -73,13 +74,15 @@
   (dotimes (flags 8)
     (let ((packet (vox-doubao-decode
                    (vox-doubao-test--response flags '(:result (:text "x")) -7 99))))
-      (should (eq (plist-get packet :last-p) (/= (logand flags 2) 0)))
-      (should (equal (plist-get packet :sequence) (and (/= (logand flags 1) 0) -7)))
-      (should (equal (plist-get packet :event) (and (/= (logand flags 4) 0) 99)))))
+      (should (eq (vox-doubao-packet-last-p packet) (/= (logand flags 2) 0)))
+      (should (equal (vox-doubao-packet-sequence packet)
+                     (and (/= (logand flags 1) 0) -7)))
+      (should (equal (vox-doubao-packet-event packet)
+                     (and (/= (logand flags 4) 0) 99)))))
   (let* ((original (vox-doubao-test--fixture "doubao-ready.bin"))
          (extended (concat (unibyte-string #x12) (substring original 1 4)
                            (unibyte-string 0 0 0 0) (substring original 4))))
-    (should (= (plist-get (vox-doubao-decode extended) :sequence) 1))))
+    (should (= (vox-doubao-packet-sequence (vox-doubao-decode extended)) 1))))
 
 (ert-deftest vox-doubao-reject-corrupt-frames ()
   :tags '(vox-unit)
@@ -100,6 +103,43 @@
     (aset gzip (- (length gzip) 4) 0)
     (should-error (vox-doubao--gunzip gzip))))
 
+(ert-deftest vox-doubao-metadata-only-result-is-ready-without-snapshot ()
+  :tags '(vox-unit)
+  ;; Synthetic frame matching one observed live first response shape: a
+  ;; successful full response whose result carries only additions.log_id,
+  ;; with no text field at all.
+  (let* ((frame (vox-doubao-test--response
+                 0 '(:result (:additions (:log_id "synthetic-log-id")))))
+         (packet (vox-doubao-decode frame))
+         (session (vox--make-session))
+         ready events errors)
+    (should-not (vox-doubao-normalize packet 1))
+    (setf (vox-session-backend-state session)
+          (list :on-ready (lambda () (push 'ready ready))
+                :on-event (lambda (event) (push event events))
+                :on-error (lambda (message) (push message errors))
+                :sequence 2))
+    (vox-doubao--message session frame 'binary)
+    (should (equal ready '(ready)))
+    (should-not events)
+    (should-not errors)))
+
+(ert-deftest vox-doubao-malformed-result-text-still-fails ()
+  :tags '(vox-unit)
+  (dolist (result '((:text 42) (:text :null) (:text ())))
+    (should-error
+     (vox-doubao-normalize
+      (vox-doubao-decode (vox-doubao-test--response 0 (list :result result)))
+      1)))
+  (should-not
+   (vox-doubao-normalize
+    (vox-doubao-decode (vox-doubao-test--response 0 '(:result :null))) 1)))
+
+(ert-deftest vox-doubao-normalize-requires-decoded-packet ()
+  :tags '(vox-unit)
+  (let ((err (should-error (vox-doubao-normalize '(:last-p t) 1))))
+    (should (string-match-p "Invalid Doubao packet" (error-message-string err)))))
+
 (ert-deftest vox-doubao-error-and-body-flags-not-completion ()
   :tags '(vox-unit)
   (let ((event (vox-doubao-normalize
@@ -109,7 +149,7 @@
   (let ((packet (vox-doubao-decode
                  (vox-doubao-test--response
                   0 '(:is_last_package t :result (:text "x" :utterances [(:definite t)]))))))
-    (should-not (plist-get packet :last-p))
+    (should-not (vox-doubao-packet-last-p packet))
     (should-not (plist-get (vox-doubao-normalize packet 1) :final-p))))
 
 (ert-deftest vox-doubao-request-config ()
@@ -397,8 +437,8 @@
          (session (vox--make-session
                    :backend-state (list :ready t :finished t
                                         :on-event (lambda (e) (push e events))))))
-    (should (plist-get packet :last-p))
-    (should-not (plist-get packet :payload))
+    (should (vox-doubao-packet-last-p packet))
+    (should-not (vox-doubao-packet-payload packet))
     (vox-doubao--message session bytes 'binary)
     (should (equal events '((:type :completed))))))
 
@@ -481,7 +521,7 @@
                 :on-error #'ignore))
     (setq vox--active-session session)
     (cl-letf (((symbol-function 'vox-doubao-decode)
-               (lambda (_payload) (list :last-p t)))
+               (lambda (_payload) (vox-doubao--make-packet :last-p t)))
               ((symbol-function 'vox-doubao-normalize)
                (lambda (_packet _revision)
                  '(:type :snapshot :text "synthetic"))))

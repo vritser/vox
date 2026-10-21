@@ -5,9 +5,17 @@
 ;; Implements the audited bigmodel_async sauc_python.zip wire format.
 ;; No Python code is imported or executed.  See docs/protocol-audit.md.
 ;;; Code:
+(require 'cl-lib)
 (require 'vox-backend)
 (require 'vox-transport)
 (require 'vox-core)
+
+(cl-defstruct (vox-doubao-packet (:constructor vox-doubao--make-packet))
+  "Decoded Doubao server packet.
+MESSAGE-TYPE is the envelope type (9 response or 15 error).  SEQUENCE,
+EVENT, LAST-P, and CODE are envelope fields.  PAYLOAD-SIZE is the encoded
+payload length and PAYLOAD is the parsed JSON body, or nil when absent."
+  message-type sequence event last-p code payload-size payload)
 
 (defcustom vox-doubao-second-pass t
   "Whether to request second-pass revisions of full snapshots."
@@ -108,7 +116,7 @@ LAST marks the audio-only final packet with flags 3 and a negative sequence."
             (vox-doubao--uint32 (length compressed)) compressed)))
 
 (defun vox-doubao-decode (bytes)
-  "Decode one complete server message BYTES into an adapter plist.
+  "Decode one complete server message BYTES into a `vox-doubao-packet'.
 Reject truncated, coalesced, unknown, or oversized messages.  The transport
 reassembles WebSocket continuation frames before calling this function.
 Sequence, last-p, and event are envelope fields, not JSON body fields."
@@ -141,10 +149,11 @@ Sequence, last-p, and event are envelope fields, not JSON body fields."
       (setq payload (vox-doubao--gunzip payload)))
     (when (and (= type 9) (/= serialization 1) (> (length payload) 0))
       (error "Doubao recognition response must be JSON"))
-    (list :message-type type :sequence sequence :event event
-          :last-p (/= (logand flags 2) 0) :code code :payload-size size
-          :payload (when (and (= serialization 1) (> (length payload) 0))
-                     (vox-json-read (decode-coding-string payload 'utf-8-unix))))))
+    (vox-doubao--make-packet
+     :message-type type :sequence sequence :event event
+     :last-p (/= (logand flags 2) 0) :code code :payload-size size
+     :payload (when (and (= serialization 1) (> (length payload) 0))
+                (vox-json-read (decode-coding-string payload 'utf-8-unix))))))
 
 (defun vox-doubao-config (&optional model)
   "Build the full-result PCM request object for MODEL, defaulting to bigmodel."
@@ -155,23 +164,40 @@ Sequence, last-p, and event are envelope fields, not JSON body fields."
                        :enable_nonstream (if vox-doubao-second-pass t :false)
                        :result_type "full")))
 
+(defun vox-doubao--result-text (result)
+  "Return RESULT's snapshot text, or nil for a metadata-only full result.
+The first successful response may carry only result metadata such as
+`additions.log_id' before any transcript exists.  A present non-string `text'
+is still malformed."
+  (cond
+   ((or (null result) (eq result :null)) nil)
+   ((not (and (proper-list-p result) (cl-evenp (length result))
+              (keywordp (car result))))
+    (error "Invalid Doubao full result"))
+   ((not (plist-member result :text)) nil)
+   (t (let ((text (plist-get result :text)))
+        (unless (stringp text) (error "Invalid Doubao full result"))
+        text))))
+
 (defun vox-doubao-normalize (packet revision)
   "Normalize decoded PACKET as a full snapshot with local receive REVISION.
 Do not interpret provider sequence as a monotonic revision; that guarantee is
-not specified.  WebSocket message order supplies local snapshot order."
-  (let ((body (plist-get packet :payload)))
-    (if (or (= (plist-get packet :message-type) 15)
-            (/= (plist-get packet :code) 0)
+not specified.  WebSocket message order supplies local snapshot order.  A
+metadata-only successful response yields nil: it is readiness, not an empty
+replacement for an earlier snapshot."
+  (unless (vox-doubao-packet-p packet)
+    (error "Invalid Doubao packet"))
+  (let ((body (vox-doubao-packet-payload packet)))
+    (if (or (= (vox-doubao-packet-message-type packet) 15)
+            (/= (vox-doubao-packet-code packet) 0)
             (and (numberp (plist-get body :code))
                  (/= (plist-get body :code) 0)))
         (list :type :error :code "provider-error"
               :message "Doubao rejected the request")
-      (let* ((result (plist-get body :result))
-             (text (and (listp result) (plist-get result :text))))
-        (when result
-          (unless (stringp text) (error "Invalid Doubao full result"))
+      (let ((text (vox-doubao--result-text (plist-get body :result))))
+        (when text
           (list :type :snapshot :text text :revision revision
-                :final-p (plist-get packet :last-p)))))))
+                :final-p (vox-doubao-packet-last-p packet)))))))
 
 (defun vox-doubao--put (session key value)
   "Store VALUE under KEY in SESSION adapter state."
@@ -187,7 +213,7 @@ not specified.  WebSocket message order supplies local snapshot order."
            (state (vox-session-backend-state session))
            (revision (1+ (or (plist-get state :revision) 0)))
            (event (vox-doubao-normalize packet revision))
-           (last (plist-get packet :last-p)))
+           (last (vox-doubao-packet-last-p packet)))
       (vox-doubao--put session :revision revision)
       (cond
        ((eq (plist-get event :type) :error)

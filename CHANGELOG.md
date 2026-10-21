@@ -141,6 +141,12 @@
 
 ### Fixed
 
+- **Doubao metadata-only ready response:** a successful `bigmodel_async` full
+  response may contain only `result.additions` metadata (for example `log_id`)
+  and no `text`. Vox now treats it as readiness and emits no snapshot instead of
+  failing the session with a generic WebSocket error
+  (rationale: [postmortem 009](postmortems/009-doubao-metadata-ready.md)).
+
 - **CI runner notices:** use the Node.js 24-based `actions/checkout@v6` and
   pin the runner to Ubuntu 24.04, avoiding the checkout runtime deprecation
   and automatic `ubuntu-latest` migration to Ubuntu 26.04.
