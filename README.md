@@ -78,6 +78,7 @@ charges.
 | `vox-show-transcript` | View current or last text; unfinished text is marked unconfirmed |
 | `vox-copy-confirmed-text` | Copy confirmed text to the kill ring |
 | `vox-forget-transcript` | Clear the last session and its recovery buffer |
+| `vox-doctor` | Check dependencies and configuration without side effects |
 
 For longer dictation, set `(setq vox-stop-mode 'manual)` and stop explicitly.
 Both modes insert once at the end of the session, not after each sentence. The

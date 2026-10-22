@@ -21,6 +21,7 @@
 (require 'vox-backend-qwen)
 (require 'vox-backend-doubao)
 (require 'vox-backend-cli)
+(require 'vox-doctor)
 (require 'vox-reload)
 
 ;;;###autoload

@@ -656,6 +656,29 @@ See [Architecture](architecture.md) for ownership boundaries.
 
 ## Troubleshooting
 
+### Self-check
+
+Run `M-x vox-doctor` before changing configuration or reporting a setup problem.
+It opens and selects a memory-only `*Vox doctor*` buffer with one line per check
+plus an optional hint: Emacs version, `websocket`, native GnuTLS and zlib, the FFmpeg
+executable, `vox-backends` and `vox-selection` validity, endpoint trust, the
+credential-source kind, `vox-audio-input` shape, effective stop mode, numeric
+limits, session state and the event-log setting. `FAIL` means the selected path
+cannot work as configured; `WARN` is advisory; `SKIP` means the item was
+deliberately not probed. The report ends with a pass/fail summary.
+
+The command is read-only. It never calls a `:key` function, reads auth-source,
+opens a microphone, lists audio devices, contacts a provider, or writes a file.
+It therefore cannot prove that a stored credential is accepted or that live
+recognition works; those remain acceptance checks. A literal key is reported as
+`WARN` without printing its value. A custom endpoint is also `WARN` regardless
+of reachability, because every connection still needs explicit approval.
+
+Device discovery remains an explicit `M-x vox-select-input-device` action: it
+can trigger native permission prompts and is not a readiness proof. For
+scripted checks, `vox-doctor-check` returns the same results as plists with
+`:id`, `:status`, `:summary`, and an optional `:hint`.
+
 ### Event log for repeated recordings
 
 Run `M-x vox-toggle-event-log` before reproducing a problem across two or more

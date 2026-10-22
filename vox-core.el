@@ -187,6 +187,28 @@ REASON is an optional fixed event-log category; MESSAGE is never logged."
           (error (vox-core-fail session "Vox callback failed; session safely stopped" 'callback)))
       (vox-log-event generation 'stale-callback :state (vox-session-state session)))))
 
+(defun vox-core--limits-error ()
+  "Return a short reason when a numeric Vox limit is invalid, else nil.
+The result names the responsible option without echoing its value, so
+read-only diagnostics can report it.  This never signals for a malformed
+value."
+  (cond
+   ((not (cl-every (lambda (limit) (and (integerp limit) (> limit 0)))
+                   (list vox-max-transcript-chars vox-max-segments
+                         vox-max-segment-id-bytes vox-max-segment-id-total-bytes)))
+    "Transcript and segment limits must be positive integers")
+   ((not (and (numberp vox-audio-backlog-seconds)
+              (<= 0.5 vox-audio-backlog-seconds 5)))
+    "`vox-audio-backlog-seconds' must be a number from 0.5 to 5")
+   ((not (and (numberp vox-connect-timeout) (> vox-connect-timeout 0)))
+    "`vox-connect-timeout' must be a positive number")
+   ((not (and (numberp vox-stop-timeout) (> vox-stop-timeout 0)))
+    "`vox-stop-timeout' must be a positive number")
+   ((not (and (numberp vox-max-session-seconds) (> vox-max-session-seconds 0)))
+    "`vox-max-session-seconds' must be a positive number")
+   ((not (and (numberp vox-preview-interval) (> vox-preview-interval 0)))
+    "`vox-preview-interval' must be a positive number")))
+
 (defun vox-core-start (backend sink &optional buffer marker model)
   "Start BACKEND with SINK, capturing BUFFER and MARKER as output ownership.
 MODEL omitted or nil selects the backend's first model, independently of
@@ -196,14 +218,8 @@ A nil SINK is supported for headless callers.  MARKER is copied and follows
 text typed at the original insertion point.  Return the new session."
   (when vox--reloading (user-error "Wait for Vox reload to finish before starting"))
   (when vox--active-session (user-error "A Vox session is already active"))
-  (unless (and (memq vox-stop-mode '(silence manual))
-               (cl-every (lambda (limit) (and (integerp limit) (> limit 0)))
-                         (list vox-max-transcript-chars vox-max-segments
-                               vox-max-segment-id-bytes vox-max-segment-id-total-bytes))
-               (numberp vox-audio-backlog-seconds)
-               (<= 0.5 vox-audio-backlog-seconds 5)
-               (> vox-connect-timeout 0) (> vox-stop-timeout 0)
-               (> vox-max-session-seconds 0) (> vox-preview-interval 0))
+  (when (or (not (memq vox-stop-mode '(silence manual)))
+            (vox-core--limits-error))
     (user-error "Invalid Vox limits"))
   (let* ((vox--starting t)
          (target (or buffer (current-buffer)))

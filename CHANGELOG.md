@@ -4,6 +4,17 @@
 
 ### Added
 
+- **Read-only self-check:** `M-x vox-doctor` reports Emacs/websocket/GnuTLS/zlib
+  availability, the FFmpeg executable, `vox-backends` and `vox-selection`
+  validity, endpoint trust, credential-source kind, input shape, effective stop
+  mode, numeric limits, session state and event-log setting in a memory-only
+  `*Vox doctor*` buffer. It resolves no credential, opens no microphone or
+  device listing, attempts no connection and writes no file; device discovery
+  stays an explicit `vox-select-input-device` action because it may prompt for
+  permissions. `vox-doctor-check` returns the same checks as plists for
+  programmatic use (rationale:
+  [postmortem 014](postmortems/014-read-only-doctor.md)).
+
 - **Idle source reload:** `M-x vox-reload` reloads local Vox `.el` modules in
   dependency order without restarting Emacs or using stale bytecode. Settings,
   selection, custom backend names, the last transcript and event log survive;
@@ -252,7 +263,7 @@
 - **CLI fixture completion:** integration tests service the whole event loop so
   an exited stdout process cannot starve its final sentinel notification.
 - **Clean package installation:** descriptor and development helpers remain
-  source-only; package.el compiles the nine runtime modules without trying to
+  source-only; package.el compiles the runtime modules without trying to
   compile test fixtures or command-line tools.
 
 ### Known limitations

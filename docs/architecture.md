@@ -13,6 +13,7 @@ root; the development layout does not add a runtime dependency or change the API
 | [vox-log.el](../vox-log.el) | Opt-in bounded event metadata, strict safe-field schema, in-memory snapshots and explicit clearing |
 | [vox-activity.el](../vox-activity.el) | Pure bounded PCM energy analysis, 20 ms windows, speech arming and quiet-duration eligibility; no timers, I/O, or transcript decisions |
 | [vox-device.el](../vox-device.el) | On-demand bounded FFmpeg listings, platform parsers, singleton auto-selection, multiple-input completion and opt-in persistence |
+| [vox-doctor.el](../vox-doctor.el) | Read-only capability and configuration report; no credentials, capture, device listing, connection or file output |
 | [vox-audio.el](../vox-audio.el) | FFmpeg capture process, binary PCM delivery, stop-to-sentinel handling |
 | [vox-transport.el](../vox-transport.el) | Guarded WebSocket I/O, fragments, message limits, TLS and asynchronous-handshake compatibility |
 | [vox-backend-qwen.el](../vox-backend-qwen.el) | Qwen VAD configuration, captured backend language on provider requests, normalized recognition events |
@@ -111,6 +112,14 @@ public commands -> session core -> backend contract -> provider / CLI
   FIFO. A nested callback cannot overtake earlier lines or overwrite a partial
   line. Startup rechecks session ownership after callable backend options, before
   allocating another session.
+- The doctor is a read-only observer. It may resolve the selected backend and
+  validate options through the same pure paths startup uses, but it never calls
+  a `:key` function, `vox-backend-secret`, capture, transport, or device listing.
+  Its report buffer is memory-only; credential values, input argv, and device
+  names are never rendered. Device discovery remains an explicit picker action
+  because listing can trigger native permission prompts and is not a readiness
+  proof. A doctor failure must block admission of live acceptance, never
+  substitute for it.
 
 Use the existing owner before adding a module or wrapper. Keep the public
 `vox-*` API stable when reorganizing tools or tests. Embedding examples and the

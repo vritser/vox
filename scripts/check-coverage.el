@@ -39,7 +39,8 @@
 (defconst vox-cov-product-files
   '("vox-activity.el" "vox-audio.el" "vox-backend.el"
     "vox-backend-cli.el" "vox-backend-doubao.el" "vox-backend-qwen.el"
-    "vox-core.el" "vox-device.el" "vox-log.el" "vox-transport.el" "vox-ui.el")
+    "vox-core.el" "vox-device.el" "vox-doctor.el" "vox-log.el"
+    "vox-transport.el" "vox-ui.el")
   "Production modules instrumented by testcover.
 `vox.el' is excluded: Edebug wrappers make `called-interactively-p' return nil
 inside instrumented commands, and the interactive start tests depend on it.")
