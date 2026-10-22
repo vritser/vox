@@ -12,7 +12,7 @@ root; the development layout does not add a runtime dependency or change the API
 | [vox-core.el](../vox-core.el) | Session lifecycle, callback generations, transcript reconciliation, PCM queue/chunker, automatic stop requests, completion and cleanup |
 | [vox-log.el](../vox-log.el) | Opt-in bounded event metadata, strict safe-field schema, in-memory snapshots and explicit clearing |
 | [vox-activity.el](../vox-activity.el) | Pure bounded PCM energy analysis, 20 ms windows, speech arming and quiet-duration eligibility; no timers, I/O, or transcript decisions |
-| [vox-device.el](../vox-device.el) | On-demand bounded FFmpeg listings, platform parsers, explicit minibuffer input selection and opt-in persistence |
+| [vox-device.el](../vox-device.el) | On-demand bounded FFmpeg listings, platform parsers, singleton auto-selection, multiple-input completion and opt-in persistence |
 | [vox-audio.el](../vox-audio.el) | FFmpeg capture process, binary PCM delivery, stop-to-sentinel handling |
 | [vox-transport.el](../vox-transport.el) | Guarded WebSocket I/O, fragments, message limits, TLS and asynchronous-handshake compatibility |
 | [vox-backend-qwen.el](../vox-backend-qwen.el) | Qwen VAD configuration, captured backend language on provider requests, normalized recognition events |
@@ -60,11 +60,18 @@ public commands -> session core -> backend contract -> provider / CLI
   Custom sinks enforce their own editability boundaries and cleanup.
 - Authoritative completion permits one final insertion. Cancellation, socket
   closure, and process exit alone cannot turn a partial transcript into success.
-- Device selection runs before interactive startup only when input is unset.
-  It never guesses an input, touches a recognizer, or persists settings without
-  an explicit save request. Startup captures its target buffer/marker and backend
-  before completion, then rechecks ownership/editability afterward. Programmatic
-  startup and self-recording CLI do not prompt for devices.
+- Device selection runs before interactive startup for Vox-owned capture only
+  when input is unset; configured input is not replaced. The same device-module
+  command used by `M-x vox-select-input-device` auto-selects exactly one discovered
+  supported input without `completing-read` and prompts for multiple inputs.
+  Zero-input and discovery-error paths remain failures, with no default fallback.
+  Selection never touches a recognizer or persists settings without an explicit
+  save request (`C-u M-x vox-select-input-device`); startup never requests a save.
+  Startup captures its target buffer/marker and backend before discovery and
+  completion, then rechecks ownership/editability afterward. Discovery can still
+  trigger OS permission UI, and a sole input can be a system-audio monitor.
+  Programmatic/headless startup and self-recording CLI do not automatically
+  discover, select, or prompt for devices.
 - `vox-selection` is the sole next-session choice: nil resolves the first directory
   entry/model, a name/model pair resolves exactly, and a registered protocol symbol
   resolves that backend with no model choice. Directory names are unique and a

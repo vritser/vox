@@ -223,10 +223,11 @@ appear.  Unsupported systems/builds require manual `vox-audio-input' setup."
 
 ;;;###autoload
 (defun vox-select-input-device (&optional save)
-  "Explicitly select a local input for `vox-audio-input' using completion.
+  "Select a local input for `vox-audio-input'.
+Use the only discovered candidate directly; prompt when there are multiple.
 With prefix SAVE, persist only `vox-audio-input' via Customize.  Otherwise
 change it for this Emacs session only.  Quit or failure retains the previous
-input.  Even a single candidate requires explicit selection."
+input."
   (interactive "P")
   (vox-device--check-idle)
   (when vox-device--selecting
@@ -238,7 +239,9 @@ input.  Even a single candidate requires explicit selection."
                                   (plist-get device :input)))
                           devices))
          ;; Do not retain private device identifiers in generic history.
-         (selection (completing-read "Vox audio input: " choices nil t nil t))
+         (selection (if (= (length choices) 1)
+                        (caar choices)
+                      (completing-read "Vox audio input: " choices nil t nil t)))
          (input (cdr (assoc selection choices)))
          (previous vox-audio-input))
     ;; Completion can accept different casing; only canonicalize a unique match.

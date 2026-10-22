@@ -34,8 +34,9 @@ SINK is a plist of :on-preview, :on-finish, :on-state, :on-error functions.
 It receives the captured session, never the callback's current buffer.
 For a headless session with no sink use `vox-core-start' directly.
 Vox-owned recordings stop after silence by default; see `vox-stop-mode'.
-An interactive start prompts for an input device when `vox-audio-input' is
-nil.  Programmatic calls require explicit input configuration and do not prompt."
+An interactive start discovers inputs when `vox-audio-input' is nil, using
+one candidate directly or prompting among multiple devices.  Programmatic
+calls require explicit input configuration and do not prompt."
   (interactive)
   (when vox--reloading (user-error "Wait for Vox reload to finish before starting"))
   (when (vox-current-session) (user-error "A Vox session is already active"))

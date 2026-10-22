@@ -46,6 +46,28 @@
     (should (= selected 1))
     (should (= started 1))))
 
+(ert-deftest vox-start-single-input-starts-without-completion ()
+  :tags '(vox-unit)
+  (let ((select-input (symbol-function 'vox-select-input-device)))
+    (dolist (command '(vox-start vox-toggle))
+      (vox-start-test--stub
+        (let ((vox-device--selecting nil) (discoveries 0))
+          (cl-letf (((symbol-function 'vox-select-input-device) select-input)
+                    ((symbol-function 'vox-device-list)
+                     (lambda ()
+                       (cl-incf discoveries)
+                       (list (list :label "Synthetic microphone" :input selection))))
+                    ((symbol-function 'completing-read)
+                     (lambda (&rest _) (ert-fail "Unexpected input prompt")))
+                    ((symbol-function 'customize-save-variable)
+                     (lambda (&rest _) (ert-fail "Unexpected input persistence"))))
+            (call-interactively command))
+          (should (= discoveries 1))
+          (should (= started 1))
+          (should (equal vox-audio-input selection))
+          (should (eq (nth 2 start-args) (current-buffer)))
+          (should-not vox-device--selecting))))))
+
 (ert-deftest vox-start-explicit-configuration-never-prompts ()
   :tags '(vox-unit)
   (vox-start-test--stub

@@ -103,6 +103,15 @@
 
 ### Changed
 
+- **Single-input auto-selection:** `M-x vox-select-input-device` selects exactly
+  one discovered supported input without minibuffer completion; first interactive
+  startup does the same for Vox-owned capture when input is unset. Multiple
+  inputs still prompt, and zero-input/discovery failures are unchanged. Startup
+  preserves configured input, headless and CLI behavior stays unchanged, and only
+  explicit `C-u M-x vox-select-input-device` requests persistence. A sole input
+  can be system audio rather than a microphone
+  (rationale: [postmortem 013](postmortems/013-single-input-auto-selection.md)).
+
 - **Simpler README:** lead with a one-sentence introduction and a `use-package`
   Git installation setup without key bindings, mirrored in the customization
   guide. Use `:demand t` and editable backend examples with key placeholders,

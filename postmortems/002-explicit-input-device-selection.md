@@ -2,6 +2,10 @@
 
 _Date: 2026-10-20. Status: Implemented. Retrospective record of `3afd60c`._
 
+_Superseded by [013](013-single-input-auto-selection.md) only for the rule that
+one discovered input requires an explicit minibuffer choice; opt-in persistence
+and the other boundaries remain unchanged._
+
 ## Background
 
 Native capture required an explicit FFmpeg input argv list. That was safe but

@@ -61,9 +61,10 @@ charges.
 
 ## Usage
 
-1. Run `M-x vox-select-input-device` to choose a microphone. The first interactive
-   recording also asks if no input is configured. Use a `C-u` prefix to save the
-   choice across Emacs restarts.
+1. Run `M-x vox-select-input-device` to select an audio input: one discovered input
+   is selected automatically; multiple inputs prompt. The first interactive
+   recording does the same if input is unset. Only `C-u M-x vox-select-input-device`
+   saves the choice across Emacs restarts.
 2. In an editable buffer, run `M-x vox-toggle`, speak, then pause. By default,
    recording stops after about 1.2 seconds of quiet audio; text is inserted after
    the provider finishes processing.

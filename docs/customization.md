@@ -89,18 +89,23 @@ through that program's own options.
 
 ## Choose an audio device
 
-Vox enumerates inputs but never silently guesses or selects the first microphone.
-Run `M-x vox-select-input-device`, select a device with minibuffer completion,
-and press Return. Even a single result requires a choice. If `vox-audio-input`
-is nil, the first **interactive** `vox-start` or `vox-toggle` opens this picker
-before connecting to a recognizer. Cancel with `C-g` to abort without starting
-recognition. Existing non-nil input configurations are not replaced automatically.
+Run `M-x vox-select-input-device` to discover supported audio inputs. Exactly one
+result is selected automatically without minibuffer completion; with multiple
+results, choose a device in the minibuffer and press Return. Vox does not choose
+an arbitrary first device from multiple results. If `vox-audio-input` is nil, the
+first **interactive** `vox-start` or `vox-toggle` uses the same selection rule for
+Vox-owned capture before connecting to a recognizer. Existing non-nil input
+configurations are not replaced on startup. No supported inputs or a discovery
+error still fails without changing the input or starting recognition. Cancel
+ongoing discovery or a multiple-device prompt with `C-g` to abort startup.
 
-A normal selection changes `vox-audio-input` for the current Emacs session only.
-Use `C-u M-x vox-select-input-device` to save that option through Customize, using
-your configured `custom-file` or Emacs init file. Saving is explicit; discovery
-and ordinary selection do not edit configuration files. Stop or cancel an active
-Vox session before choosing a different input.
+A normal selection, including automatic selection of one input, changes
+`vox-audio-input` for the current Emacs session only. Use
+`C-u M-x vox-select-input-device` to save that option through Customize, using
+your configured `custom-file` or Emacs init file. Saving is explicit even for one
+input; discovery and ordinary selection do not edit configuration files. First
+interactive startup never requests persistence. Stop or cancel an active Vox
+session before choosing a different input.
 
 | System | Enumerated inputs | Requirements / limitations |
 | --- | --- | --- |
@@ -110,7 +115,8 @@ Vox session before choosing a different input.
 
 Rerun the picker after changing devices. Saving an AVFoundation index does not
 make it a stable physical-device identity. Known PulseAudio monitor sources are
-labelled as system audio; the list is not guaranteed to contain only microphones.
+labelled as system audio; even a sole automatically selected input may be a
+system-audio monitor, not a microphone.
 ALSA-only systems, unsupported platforms, or builds without listing support still
 use explicit `vox-audio-input` configuration as shown below; there is no silent
 fallback to a default input.
@@ -122,11 +128,13 @@ output to 64 KiB, and defaults to a 5-second timeout. Set
 failure cleans up that listing process. Listing may contact local audio services,
 initialize device drivers, or cause native permission prompts; it is not a
 promise of zero hardware interaction. Grant required permissions and retry if
-needed. No recognizer is contacted until a first-start choice succeeds.
+needed. No recognizer is contacted until first-start input selection succeeds,
+whether automatically or through completion.
 
-Noninteractive/programmatic `vox-start` and headless `vox-core-start` do not open
-a picker; configure their input explicitly. The self-recording CLI backend has
-its own device handling and does not use this picker automatically. The manual
+Noninteractive/programmatic `vox-start` and headless `vox-core-start` do not
+discover or auto-select inputs or open a picker; configure their input explicitly.
+The self-recording CLI backend has its own device handling and does not use this
+picker automatically. The manual
 input remains an argv list, never a shell command. PCM is signed 16-bit
 little-endian, 16 kHz mono, without a WAV header. `vox-audio-program` defaults to
 `ffmpeg` and is also used for listing.
