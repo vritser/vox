@@ -4,6 +4,16 @@
 
 ### Added
 
+- **Qwen Audio task-streaming:** `vox-make-qwen-audio` adds native support
+  for `qwen-audio-3.0-asr-flash-streaming` using DashScope `run-task`, binary PCM,
+  and `finish-task` on `/api-ws/v1/inference`. Language hints, named selection,
+  lazy credentials, source reload, and diagnostics use the existing interfaces.
+  Only matching `task-finished` after local finish and finalized sentences permits
+  insertion; cancellation or an unfinished tail never promotes partial text.
+  The existing Qwen Realtime backend and default selection remain unchanged.
+  Validation is offline, not authenticated provider acceptance (rationale:
+  [postmortem 015](postmortems/015-qwen-task-streaming.md)).
+
 - **Read-only self-check:** `M-x vox-doctor` reports Emacs/websocket/GnuTLS/zlib
   availability, the FFmpeg executable, `vox-backends` and `vox-selection`
   validity, endpoint trust, credential-source kind, input shape, effective stop

@@ -241,3 +241,47 @@ provider files passed byte compilation with `byte-compile-error-on-warn=t`.
 This is offline validation, not a network integration claim.
 
 No credentials or recorded audio were used, and no commits were created.
+
+## Qwen task-streaming addendum (2026-10-22)
+
+This addendum covers `qwen-audio-3.0-asr-flash-streaming`, not the Realtime
+adapter audited on 2026-10-20. The model-page `web_fetch` attempts returned
+non-public-IP resolution errors; the official pages were then read through the
+browser. Sources:
+
+- [Model page](https://help.aliyun.com/zh/model-studio/qwen-audio-3-0-asr-flash-streaming)
+  identifies the requested streaming model.
+- [WebSocket access](https://help.aliyun.com/zh/model-studio/qwen-audio-asr-streaming-websocket-api)
+  documents `/api-ws/v1/inference`, Bearer authorization, binary mono audio,
+  task-started readiness, finish-task followed by final results and task-finished,
+  and migration from public DashScope hosts to workspace-specific domains.
+- [Client events](https://help.aliyun.com/zh/model-studio/qwen-audio-asr-streaming-client-events)
+  documents UUID task IDs, duplex streaming, audio/asr/recognition task fields,
+  PCM/sample rate, optional language_hints and max_sentence_silence (800 ms by
+  default, 200-6000 range). Its current example uses the newer 3.1 model; the
+  implementation uses the explicitly requested 3.0 model and no 3.1-only options.
+- [Server events](https://help.aliyun.com/zh/model-studio/qwen-audio-asr-streaming-server-events)
+  documents task-started/result-generated/task-finished/task-failed and
+  payload.output.sentence: positive sentence_id, text, sentence_end, and heartbeat.
+
+The separate adapter sends run-task JSON, waits for matching task-started, then
+sends raw PCM16LE at 16000 Hz in binary WebSocket frames. Finish uses the same
+task ID and an empty input object, after queued audio drains. Nil language omits
+the hint; a configured language becomes a one-element JSON array. Requests are
+captured before asynchronous open, after endpoint approval and lazy key lookup
+with session-ownership rechecks.
+
+Sentence text is a replacing segment, not an append delta or a whole-session
+snapshot. Heartbeats are ignored. A bounded ID/status map freezes final sentences
+and rejects excess IDs. Only task-finished after local finish and no provisional
+sentence yields completion. A remaining partial fails rather than being promoted
+by core completion. Close/error/cancel are not success; task ID mismatch,
+malformed sentence fields and premature completion fail closed. Provider error
+messages and arbitrary metadata are not logged or surfaced.
+
+Tests use **synthetic** payloads and PCM with fake transports/capture. They are
+not official captures or live-provider acceptance. No key, microphone, cloud
+recognition or model-entitlement check was used. Workspace-specific host access,
+authenticated handshakes, real sentence/stop tails, no-speech server behavior,
+latency and language accuracy remain unverified. See
+[decision 015](../postmortems/015-qwen-task-streaming.md) for the rationale.

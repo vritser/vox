@@ -79,7 +79,7 @@ only trusted local source directories are supported.
 - Settings, backend/model selection, input device, selection history, the last
   transcript, event-log contents and generation counter remain intact. Custom
   backend registrations under independent names survive; built-in registrations
-  (`qwen`, `doubao`, `cli`) refresh from source.
+  (`qwen`, `qwen-audio`, `doubao`, `cli`) refresh from source.
 - Functions and constants refresh. Package keymap defaults update in place,
   replacing ad-hoc edits to those maps. Mode-line image caches are invalidated,
   but user placement/removal of the indicator is preserved. Buffer text, point,
@@ -128,6 +128,8 @@ reuse old figures as proof of a new run.
 Before claiming production acceptance, manually verify both providers with
 region-correct credentials and microphone consent:
 
+- Exercise both Qwen protocols separately: Realtime `session.finished` and
+  task-streaming `task-finished`, including sentence revisions and stop tails.
 - 30-60 seconds of Chinese/English speech, multiple revisions, and final events
   after stop, without duplicate insertion.
 - Silence, invalid keys, network loss, and cancellation.

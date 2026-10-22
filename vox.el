@@ -19,6 +19,7 @@
 (require 'vox-device)
 (require 'vox-transport)
 (require 'vox-backend-qwen)
+(require 'vox-backend-qwen-audio)
 (require 'vox-backend-doubao)
 (require 'vox-backend-cli)
 (require 'vox-doctor)

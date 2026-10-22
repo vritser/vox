@@ -40,6 +40,15 @@
               '("2026-10-20T09:08:07.006+0800 g=41 audio-send bytes=3200 sent=6400 queued=0 state=recording tail-risk=nil"
                 "2026-10-20T09:08:07.006+0800 g=42 start backend=doubao stop-mode=silence"))))))
 
+(ert-deftest vox-test-log-identifies-qwen-audio-without-task-data ()
+  :tags '(vox-unit)
+  (let ((vox-event-log-enabled t) (vox-event-log-max-entries 10)
+        (vox-log--entries nil))
+    (cl-letf (((symbol-function 'format-time-string) (lambda (&rest _) "TIME")))
+      (vox-log-event 1 'start :backend 'qwen-audio :task-id "synthetic-private-id")
+      (should (equal (ring-elements vox-log--entries)
+                     '("TIME g=1 start backend=qwen-audio"))))))
+
 (ert-deftest vox-test-log-never-formats-private-or-unknown-values ()
   :tags '(vox-unit)
   (let ((vox-event-log-enabled t)

@@ -46,8 +46,11 @@ its own audio.
 ## Recognition language
 
 Set recognition language when constructing each Qwen backend:
-`(vox-make-qwen NAME :language STRING-OR-NIL)`. Nil or an omitted `:language`
-means automatic detection: Vox omits the language hint from `session.update`.
+`(vox-make-qwen NAME :language STRING-OR-NIL)` or
+`(vox-make-qwen-audio NAME :language STRING-OR-NIL)`.
+Nil or an omitted `:language` means automatic detection: Vox omits the hint.
+Realtime sends `input_audio_transcription.language` in `session.update`;
+task-streaming sends a one-element `parameters.language_hints` array in `run-task`.
 A string requests a language supported by the selected Qwen model. Codes use
 ASCII letters, optionally followed by hyphen-separated alphanumeric subtags;
 local syntax validation does not establish model support. For example, keep
@@ -236,7 +239,7 @@ Run `M-x vox-select` for one completion list of backend/model pairs, plus
 The picker stores a two-string list, or the symbol `cli`, and uses
 `vox-selection-history`. It is case-sensitive even when global completion ignores
 case. It can replace a stale current choice without first resolving it, but
-requires a valid nonempty directory. Other registered symbols (`qwen`, `doubao`,
+requires a valid nonempty directory. Other registered symbols (`qwen`, `qwen-audio`, `doubao`,
 or an extension) are set in Lisp, not offered by the picker. For CLI-only setups,
 set `(setq vox-selection 'cli)` directly; startup then ignores the directory.
 
@@ -261,29 +264,29 @@ directory:
 Here `backend` is an object or registered protocol symbol. The same symbols are
 valid as a `vox-selection` default, which has no model slot; use a directory pair
 to choose a model. The picker lists only directory pairs and `cli`. Built-in
-`qwen` and `doubao` symbols use factory defaults; `cli` and other registered
+`qwen`, `qwen-audio`, and `doubao` symbols use factory defaults; `cli` and other registered
 extensions retain their programmatic contracts. `vox-start` without a backend uses
 `vox-selection`; passing a model requires an explicit backend. Core and method
 lookup never consult global selection. The `vox-backend` struct and its accessors
 remain the configuration API.
 
-The Qwen adapter implements **Qwen-ASR-Realtime**, including
-`qwen3-asr-flash-realtime`. The separately documented
-`qwen-audio-3.0-asr-flash-streaming` uses a
-[task-streaming protocol](https://help.aliyun.com/zh/model-studio/qwen-audio-asr-streaming-websocket-api)
-(`run-task`, binary audio, `task-finished`) on `/api-ws/v1/inference`.
-That protocol is not implemented here. Adding its model ID to `:models`, or
-changing only `:endpoint`, does not adapt the wire messages. Use a supported
-Realtime model with this adapter; local mocked tests do not establish model
-compatibility or recognition accuracy.
+Qwen has two separate adapters. `vox-make-qwen` implements **Qwen-ASR-Realtime**,
+including `qwen3-asr-flash-realtime`, on `/api-ws/v1/realtime`.
+`vox-make-qwen-audio` implements **Qwen-Audio-ASR-Streaming**, defaulting to
+`qwen-audio-3.0-asr-flash-streaming`, on `/api-ws/v1/inference`.
+Use the matching constructor, not just a different model ID or endpoint:
+Realtime uses `session.update` and base64 audio; task-streaming uses `run-task`
+and binary audio. Local mocked tests do not establish account/model access or
+recognition accuracy.
 
-Both constructors accept a display NAME, `:host`, `:endpoint`, `:models`, and
-`:key`. Qwen also accepts `:language` (nil or a language-code string), as described
+All three cloud constructors accept a display NAME, `:host`, `:endpoint`,
+`:models`, and `:key`. Both Qwen constructors also accept `:language`, as described
 under [Recognition language](#recognition-language). Hosts are DNS names or IPv4
 addresses with an optional port, without a scheme or path. Endpoints are absolute
-paths, optionally with query parameters; Vox always uses WSS. For Qwen the selected
+paths, optionally with query parameters; Vox always uses WSS. For Qwen Realtime the selected
 model replaces any existing `model` query parameter, including on custom
-endpoints; it is never ignored just because a custom endpoint is supplied. Doubao
+endpoints; it is never ignored just because a custom endpoint is supplied.
+Qwen task-streaming leaves the endpoint unchanged and sends `payload.model`. Doubao
 sends the selected ID in `model_name` and also accepts the separate `:resource-id`
 entitlement/billing option.
 
@@ -369,7 +372,7 @@ terminal's environment.
 
 ### Qwen
 
-Qwen defaults to the Beijing public endpoint and model
+Qwen Realtime defaults to the Beijing public endpoint and model
 `qwen3-asr-flash-realtime`. It is a VAD-only adapter. For Singapore:
 
 ```elisp
@@ -385,6 +388,44 @@ requirements in current provider documentation. Workspace-specific or otherwise
 custom hosts require explicit confirmation for each connection; batch mode
 rejects unapproved custom hosts. Only WSS is accepted; certificate and hostname
 verification are not disabled.
+
+### Qwen Audio task-streaming
+
+The constructor is `vox-make-qwen-audio` and the registered protocol is
+`qwen-audio`. This names the ASR task-streaming adapter, not every Qwen Audio
+API.
+
+```elisp
+(setq vox-backends
+      (list (vox-make-qwen-audio "Qwen Audio 3.0"
+              :models '(qwen-audio-3.0-asr-flash-streaming)
+              :language nil))
+      vox-selection '("Qwen Audio 3.0" qwen-audio-3.0-asr-flash-streaming))
+```
+
+This example uses auth-source for `dashscope.aliyuncs.com` (login `apikey`).
+Use `:host "dashscope-intl.aliyuncs.com"` with Singapore credentials, or a
+complete workspace-specific hostname from the
+[official WebSocket guide](https://help.aliyun.com/zh/model-studio/qwen-audio-asr-streaming-websocket-api).
+Workspace hosts still require per-connection confirmation; Vox does not expand
+`{WorkspaceId}` or trust arbitrary subdomains. The endpoint defaults to
+`/api-ws/v1/inference`; there is no `model` query parameter added by Vox.
+The example replaces the directory; add this object alongside your existing
+backends instead if you want to switch between them with `M-x vox-select`.
+
+Recording starts after `task-started`. Stop drains PCM, sends `finish-task` once,
+and waits for `task-finished` before inserting. Per-sentence revisions replace
+their earlier preview; final sentences cannot be overwritten by late events.
+If the task ends while a sentence is still provisional, Vox fails without
+inserting; use explicit transcript recovery rather than treating that text as
+confirmed. No-sentence completion inserts no text. Cancel closes without finish.
+
+`vox-qwen-audio-silence-ms` controls server sentence segmentation (default
+800 ms, range 200-6000), not local silence-stop timing. `:language "en"` or
+`"zh"` sends one language hint; nil keeps automatic detection. Context injection,
+hotwords, multiple simultaneous hints, and other advanced provider parameters
+are not exposed. Authenticated recognition and microphone behavior remain
+unverified; see the [dated protocol addendum](protocol-audit.md#qwen-task-streaming-addendum-2026-10-22).
 
 ### Doubao (experimental)
 
@@ -511,7 +552,8 @@ commits a transcript. Errors retain accepted text for explicit recovery.
   mode is always manual. Text-event arrival gaps
   are never treated as acoustic silence; the CLI protocol is unchanged.
 
-Local stopping is separate from `vox-qwen-silence-ms`, which controls server-side
+Local stopping is separate from `vox-qwen-silence-ms` (Realtime) and
+`vox-qwen-audio-silence-ms` (task-streaming), which control server-side
 VAD segmentation. No provider turn-final or `utterances[].definite` flag is
 reinterpreted as whole-session completion. `:stop-reason` in session statistics
 is `silence` when the local detector requested the stop.

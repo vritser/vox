@@ -17,6 +17,7 @@
 ;; Resolving a configuration object consults the protocol registry, so the
 ;; built-in adapters must be registered even when only this module is loaded.
 (require 'vox-backend-qwen)
+(require 'vox-backend-qwen-audio)
 (require 'vox-backend-doubao)
 (require 'vox-backend-cli)
 
@@ -198,8 +199,9 @@ This never approves a custom host or opens a connection."
                (host (url-host (url-generic-parse-url url)))
                (type (vox-backend-type configuration))
                (official (pcase type
-                           ('qwen '("dashscope.aliyuncs.com"
-                                    "dashscope-intl.aliyuncs.com"))
+                           ((or 'qwen 'qwen-audio)
+                            '("dashscope.aliyuncs.com"
+                              "dashscope-intl.aliyuncs.com"))
                            ('doubao '("openspeech.bytedance.com")))))
           (if (and official (member host official))
               (vox-doctor--result 'endpoint 'ok

@@ -261,6 +261,7 @@
                             (format-before mode-line-format)
                             (expected (length (vox-reload--sources directory))))
                         (define-key ui-map (kbd "x") #'ignore)
+                        (puthash 'qwen-audio '(:connect ignore) registry)
                         (let ((original (symbol-function 'vox-core-start)) attempts)
                           ;; Synthetic legacy entrypoint ignores the reload flag.
                           (fset 'vox-core-start
@@ -305,6 +306,10 @@
                         (should (= vox--selection-revision 7))
                         (should (eq vox--backends registry))
                         (should (gethash 'synthetic registry))
+                        (should (eq (plist-get (gethash 'qwen-audio registry) :connect)
+                                    #'vox-qwen-audio-connect))
+                        (should (eq (plist-get (gethash 'qwen-audio registry) :send-pcm)
+                                    #'vox-qwen-audio-send-pcm))
                         (should (eq vox-log--entries log))
                         (should vox-event-log-enabled)
                         (should (eq vox--last-session last))

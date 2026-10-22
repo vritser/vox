@@ -19,7 +19,7 @@
           (vox--generation 0) (vox-selection-history nil)
           (vox--selection-revision 0)
           (connections 0) (cancels 0))
-     (dolist (type '(qwen doubao cli))
+     (dolist (type '(qwen qwen-audio doubao cli))
        (vox-register-backend
         type (list :connect (lambda (_session ready &rest _)
                               (cl-incf connections) (funcall ready))
@@ -62,6 +62,22 @@
       (should (string-match-p "Second.*second-a" reported)))
     (should (equal vox-selection '("Second" "second-a")))
     (should (equal vox-backends (list first second)))
+    (should (= connections 0))))
+
+(ert-deftest vox-selection-offers-qwen-task-streaming-pair ()
+  :tags '(vox-unit)
+  (vox-backend-selection-test--with
+    (setq vox-backends (list (vox-make-qwen-audio "Streaming")))
+    (cl-letf (((symbol-function 'completing-read)
+               (lambda (_prompt collection &rest _)
+                 (should (equal collection
+                                '(("\"Streaming\" / \"qwen-audio-3.0-asr-flash-streaming\""
+                                   "Streaming" "qwen-audio-3.0-asr-flash-streaming")
+                                  ("cli (no remote model)" . cli))))
+                 (caar collection))))
+      (should (equal (vox-select)
+                     '("Streaming" "qwen-audio-3.0-asr-flash-streaming"))))
+    (should (eq (vox-backend-type (car (vox--resolve-selection))) 'qwen-audio))
     (should (= connections 0))))
 
 (ert-deftest vox-selection-same-backend-selects-explicit-model ()

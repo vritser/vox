@@ -7,6 +7,7 @@
 (require 'vox-test-support)
 (require 'vox-backend)
 (require 'vox-backend-qwen)
+(require 'vox-backend-qwen-audio)
 (require 'vox-backend-doubao)
 
 (ert-deftest vox-config-factory-defaults ()
@@ -201,7 +202,7 @@
 (ert-deftest vox-config-builtin-symbol-shortcuts-and-safe-unknown-errors ()
   :tags '(vox-unit)
   (let ((vox-selection '("Missing" invalid)))
-    (dolist (backend '(qwen doubao))
+    (dolist (backend '(qwen qwen-audio doubao))
       (let ((methods (vox-backend-methods backend)))
         (should (vox-backend-p (plist-get methods :configuration)))
         (should (eq (vox-backend-type (plist-get methods :configuration)) backend))

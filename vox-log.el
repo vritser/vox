@@ -47,7 +47,7 @@ Capacity changes take effect on the next recorded event."
   '((:state connecting recording draining finalizing completed cancelled error)
     (:reason manual silence duration connecting timeout callback recorder
              backlog send provider invalid-event sink cancelled unknown)
-    (:backend qwen doubao cli other)
+    (:backend qwen qwen-audio doubao cli other)
     (:kind segment snapshot completed error unknown segment-partial segment-final
            ready session-created speech-start speech-stop buffer-committed)
     (:status run exit signal failed closed)

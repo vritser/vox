@@ -171,6 +171,25 @@
       (should (eq (plist-get result :status) 'warn))
       (should (string-match-p "asr.example.test" (plist-get result :summary))))))
 
+(ert-deftest vox-doctor-qwen-audio-is-read-only-and-classified ()
+  :tags '(vox-unit)
+  (vox-doctor-test--env
+    (setq vox-backends
+          (list (vox-make-qwen-audio
+                 "Streaming" :host "dashscope-intl.aliyuncs.com"
+                 :key (lambda () (ert-fail "Doctor read a streaming key")))))
+    (cl-letf (((symbol-function 'vox-transport-open)
+               (lambda (&rest _) (ert-fail "Doctor connected"))))
+      (let ((results (vox-doctor-check)))
+        (should (eq (vox-doctor-test--status 'endpoint results) 'ok))
+        (should (eq (vox-doctor-test--status 'key results) 'ok))
+        (should (equal (plist-get (vox-doctor-test--get 'selection results) :summary)
+                       "Streaming / qwen-audio-3.0-asr-flash-streaming"))))
+    (setf (vox-backend-host (car vox-backends)) "workspace.cn-beijing.maas.aliyuncs.com")
+    (should (eq (vox-doctor-test--status 'endpoint (vox-doctor-check)) 'warn))
+    (setq vox-selection 'qwen-audio)
+    (should (eq (vox-doctor-test--status 'selection (vox-doctor-check)) 'ok))))
+
 (ert-deftest vox-doctor-checks-have-no-runtime-side-effects ()
   :tags '(vox-unit)
   (vox-doctor-test--env

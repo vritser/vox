@@ -39,6 +39,7 @@
 (defconst vox-cov-product-files
   '("vox-activity.el" "vox-audio.el" "vox-backend.el"
     "vox-backend-cli.el" "vox-backend-doubao.el" "vox-backend-qwen.el"
+    "vox-backend-qwen-audio.el"
     "vox-core.el" "vox-device.el" "vox-doctor.el" "vox-log.el"
     "vox-transport.el" "vox-ui.el")
   "Production modules instrumented by testcover.

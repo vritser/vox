@@ -17,6 +17,7 @@ root; the development layout does not add a runtime dependency or change the API
 | [vox-audio.el](../vox-audio.el) | FFmpeg capture process, binary PCM delivery, stop-to-sentinel handling |
 | [vox-transport.el](../vox-transport.el) | Guarded WebSocket I/O, fragments, message limits, TLS and asynchronous-handshake compatibility |
 | [vox-backend-qwen.el](../vox-backend-qwen.el) | Qwen VAD configuration, captured backend language on provider requests, normalized recognition events |
+| [vox-backend-qwen-audio.el](../vox-backend-qwen-audio.el) | Qwen Audio run-task protocol, task correlation, binary PCM, bounded sentence finality and task completion |
 | [vox-backend-doubao.el](../vox-backend-doubao.el) | Experimental Doubao binary/gzip protocol, snapshot events, final packet |
 | [vox-backend-cli.el](../vox-backend-cli.el) | Trusted external process, NDJSON v1 framing and explicit completion/exit contract |
 | [vox-ui.el](../vox-ui.el) | Preview overlay and captured-buffer sink, read-only checks, one undoable insertion |
@@ -81,8 +82,10 @@ public commands -> session core -> backend contract -> provider / CLI
   changes without overwriting newer choices; it never connects or reads credentials.
 - Backend factories are pure configuration construction. `vox-make-qwen` accepts
   `:language` as a string or nil (the default, automatic detection). The shared
-  `vox-backend` struct owns the language field; Qwen alone uses it on the wire,
-  omitting the hint for nil. There is no global `vox-qwen-language` or fallback,
+  `vox-backend` struct owns the language field; the Qwen adapters use it on the wire,
+  omitting the hint for nil. `vox-make-qwen-audio` uses the same field for a
+  one-element `language_hints` array in `run-task`, not Realtime session events.
+  There is no global `vox-qwen-language` or fallback,
   and no new language option for Doubao or the CLI. Core captures a detached
   backend object, including a copy of the language string, and selected model in
   method metadata before state callbacks; public startup also snapshots them
@@ -96,6 +99,12 @@ public commands -> session core -> backend contract -> provider / CLI
   sessions, not the snapshot captured before those callbacks.
 - Loading Vox is silent and does not start capture or connect. Backend registration
   is package setup, not permission to send audio.
+- Qwen task-streaming is a distinct registered protocol, not model-name routing
+  inside Realtime. It waits for a matching `task-started`, sends raw binary PCM,
+  and accepts `task-finished` only after local finish and no provisional sentence
+  remains. Sentence IDs map to core segments; a bounded status map suppresses late
+  partials and duplicate finals. Cancellation and premature socket close cannot
+  complete a task. The old Qwen defaults and core completion semantics are unchanged.
 - Source reload refuses active ownership, pending startup and device interaction.
   Core/public startup and device discovery refuse reentry while reload is active.
   Exact source loads preserve settings, session generations and retained history;

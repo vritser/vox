@@ -127,6 +127,24 @@ or a model-supported language code string, such as \"en\" or \"zh\".
                       :models models :key key :language language)))
 
 ;;;###autoload
+(cl-defun vox-make-qwen-audio
+    (name &key (host "dashscope.aliyuncs.com")
+          (endpoint "/api-ws/v1/inference")
+          (models '(qwen-audio-3.0-asr-flash-streaming)) key language)
+  "Make a Qwen task-streaming configuration named NAME.
+HOST and ENDPOINT select the WSS destination.  MODELS lists allowed model
+IDs, sent in run-task rather than the URL.  KEY is nil for auth-source,
+a literal key string, or a zero-argument function.  LANGUAGE is nil for
+automatic detection, or one language code sent as language_hints.
+This protocol is distinct from the Realtime API used by `vox-make-qwen'.
+
+(fn NAME &key HOST ENDPOINT MODELS KEY LANGUAGE)"
+  (vox-backend-snapshot
+   (vox--make-backend :name name :type 'qwen-audio :host host
+                      :endpoint endpoint :models models :key key
+                      :language language)))
+
+;;;###autoload
 (cl-defun vox-make-doubao
     (name &key (host "openspeech.bytedance.com")
           (endpoint "/api/v3/sauc/bigmodel_async") (models '(bigmodel))
@@ -144,16 +162,17 @@ resource.
 
 (defvar vox-backends (list (vox-make-qwen "Qwen"))
   "Directory of backend objects, in default and completion order.
-Configure with `vox-make-qwen' or `vox-make-doubao'.  Names must be unique,
-case-sensitive strings.  This is separate from the protocol registry.")
+Configure with `vox-make-qwen', `vox-make-qwen-audio', or
+`vox-make-doubao'.  Names must be unique, case-sensitive strings.
+This is separate from the protocol registry.")
 
 (defvar vox-selection nil
   "Backend/model choice for the next recording.
 Nil uses the first of `vox-backends' and its first model.  A two-element
 list (NAME MODEL) selects the backend named NAME; MODEL is nil for its
 first model, or an allowed symbol/string ID.  A registered protocol symbol
-selects that backend without a model choice: `cli', the built-in `qwen' /
-`doubao' factory defaults, or an extension from `vox-register-backend'.
+selects that backend without a model choice: `cli', the built-in `qwen',
+`qwen-audio', or `doubao' defaults, or a registered extension.
 Use `vox-select' interactively.  Missing names, unregistered symbols, and
 invalid models are errors, never fallback requests.")
 
@@ -239,7 +258,7 @@ recorder backend must also implement :send-pcm.  Connect receives SESSION,
 ON-READY (no arguments), ON-EVENT (one normalized plist), and ON-ERROR
 (one sanitized string).  Other methods receive SESSION, plus PCM for send.
 `vox-backend-methods' adds :configuration and :model only for configuration
-objects and the built-in `qwen'/`doubao' symbols; external names keep this
+objects and built-in cloud protocol symbols; external names keep this
 plist unchanged."
   (dolist (key '(:connect :finish :cancel :close))
     (unless (functionp (plist-get methods key))
@@ -259,6 +278,8 @@ credentials."
   (let* ((configuration
           (cond ((vox-backend-p backend) (vox-backend-snapshot backend))
                 ((eq backend 'qwen) (vox-make-qwen "Qwen"))
+                 ((eq backend 'qwen-audio)
+                  (vox-make-qwen-audio "Qwen Audio"))
                 ((eq backend 'doubao) (vox-make-doubao "Doubao"))))
          (type (if configuration (vox-backend-type configuration) backend))
          (registered (and (symbolp type) (gethash type vox--backends))))
@@ -272,9 +293,9 @@ credentials."
 
 (defun vox-backend-url (configuration model)
   "Build a WSS URL from CONFIGURATION and selected MODEL, without approval.
-For Qwen, replace every decoded model query parameter with MODEL.  Other
-query parameters retain their original encoding and order.  Doubao keeps
-its configured endpoint; its adapter sends the model in JSON instead."
+For Qwen Realtime, replace every decoded model query parameter with MODEL.
+Other query parameters retain their original encoding and order.  Doubao
+and Qwen task-streaming keep their endpoint and send the model in JSON."
   (setq configuration (vox-backend-snapshot configuration))
   (unless (vox-backend-p configuration)
     (user-error "Invalid Vox backend configuration"))

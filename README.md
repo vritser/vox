@@ -44,6 +44,10 @@ can be removed. The defaults select Qwen in Beijing. For Doubao, set
 must match your enabled service. Keep the endpoint/model pairing unless you know
 the provider supports your changes. See [regions and provider settings](docs/customization.md#credentials-and-regions).
 
+For `qwen-audio-3.0-asr-flash-streaming`, use `vox-make-qwen-audio`
+instead of `vox-make-qwen`: the models use different wire protocols. See the
+[streaming configuration](docs/customization.md#qwen-audio-task-streaming).
+
 No key bindings are installed by this configuration; use `M-x` or bind commands
 to keys of your choice. Loading Vox does not start recording.
 
