@@ -124,6 +124,15 @@
 
 ### Changed
 
+- **Untruncated preview (breaking):** the recording preview overlay now carries
+  the entire hypothesis on one logical line instead of clipping it to a measured
+  column width. Whitespace normalization remains unchanged; Emacs display settings
+  determine wrapping and visibility. `vox-preview-width` is removed because it
+  only bounded that clipping; `vox-preview` and `vox-preview-interval` are
+  unchanged. The preview remains read-only, adds no buffer text, and does not
+  change the single authoritative insertion (rationale:
+  [postmortem 016](postmortems/016-full-preview-layout.md)).
+
 - **Single-input auto-selection:** `M-x vox-select-input-device` selects exactly
   one discovered supported input without minibuffer completion; first interactive
   startup does the same for Vox-owned capture when input is unset. Multiple

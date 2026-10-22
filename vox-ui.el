@@ -13,10 +13,11 @@
 (declare-function motion-line-stop "motion-line" (slot))
 (declare-function motion-line-string "motion-line" (slot))
 
-(defcustom vox-preview t "Show a one-line overlay while recording."
+(defcustom vox-preview t
+  "Show the evolving hypothesis as an overlay while recording.
+The overlay carries the whole hypothesis; display wrapping decides how it
+is laid out, so a long preview is never truncated."
   :type 'boolean :group 'vox)
-(defcustom vox-preview-width 72 "Maximum preview display columns."
-  :type 'integer :group 'vox)
 (defcustom vox-mode-line t
   "Show the persistent Vox microphone icon in the mode line."
   :type 'boolean :group 'vox)
@@ -287,21 +288,6 @@ this construct into your own `mode-line-format'.")
                  (vox-ui--mode-line-update session state)
                  (when on-state (funcall on-state session state))))))
 
-(defun vox-ui--preview-columns (session)
-  "Return safe one-line preview columns at SESSION's captured marker."
-  (let* ((buffer (vox-session-target-buffer session))
-         (column (with-current-buffer buffer
-                   (save-excursion
-                     (save-restriction
-                       (widen)
-                       (goto-char (vox-session-target-marker session))
-                       (current-column)))))
-         (width (max 0 vox-preview-width)))
-    (dolist (window (get-buffer-window-list buffer nil t))
-      (setq width (min width (max 0 (- (window-body-width window)
-                                      (- column (window-hscroll window)) 1)))))
-    width))
-
 (defun vox-make-buffer-sink ()
   "Return a sink using the session's captured buffer and insertion marker.
 Typing at that marker moves it after typed text.  Point follows committed text
@@ -319,14 +305,12 @@ or sends input to an agent."
                                        (vox-session-target-buffer session) t t)))
          (move-overlay overlay (vox-session-target-marker session)
                        (vox-session-target-marker session))
-         (let ((width (vox-ui--preview-columns session)))
-           (overlay-put overlay 'after-string
-                        (when (> width 0)
-                          (propertize
-                           (truncate-string-to-width
-                            (replace-regexp-in-string "[\n\r\t]+" " " text)
-                            width nil nil (when (>= width 3) "..."))
-                           'face 'shadow))))))
+         ;; Keep one logical line and render all of it; display wrapping,
+         ;; not this code, decides the visual lines and when to clip.
+         (overlay-put overlay 'after-string
+                      (propertize
+                       (replace-regexp-in-string "[\n\r\t]+" " " text)
+                       'face 'shadow))))
      :on-state
      (lambda (session state)
        (when (memq state '(completed cancelled error))

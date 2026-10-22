@@ -209,7 +209,6 @@
   :tags '(vox-unit)
   (vox-test-session
     (let* ((vox-preview t)
-           (vox-preview-width 72)
            (sink (vox-make-buffer-sink)))
       (setf (vox-session-sink session) sink)
       (dolist (example '(("recognized words" . "recognized words")
@@ -221,6 +220,16 @@
           (should (equal (substring-no-properties display)
                          (cdr example)))
           (should (eq (get-text-property 0 'face display) 'shadow))))
+      ;; Long hypotheses reach the overlay whole; wrapping belongs to display.
+      (let* ((long (mapconcat (lambda (n) (format "word%d" n))
+                              (number-sequence 1 60) " "))
+             (expected (concat long " 尾")))
+        (funcall (plist-get sink :on-preview) session (concat long "\n尾") 'recording)
+        (let* ((overlay (car (append (car (overlay-lists)) (cdr (overlay-lists)))))
+               (display (overlay-get overlay 'after-string)))
+          (should (equal (substring-no-properties display) expected))
+          (should-not (string-match-p "\n" display))
+          (should-not (string-match-p "\\.\\.\\." display))))
       (should (equal (buffer-string) ""))
       (should (= (point) 1)))))
 
@@ -304,8 +313,10 @@
           (let ((inhibit-message t)) (undo 1))
           (should (equal (buffer-string) "prefix|suffix")))))))
 
-(ert-deftest vox-ui-narrowed-preview-measures-real-marker ()
+(ert-deftest vox-ui-narrowed-preview-keeps-real-marker ()
   :tags '(vox-unit)
+  ;; Narrowing must not relocate or clip the overlay: it still attaches at the
+  ;; captured marker and carries the whole hypothesis.
   (dolist (bounds '((1 4) (10 14)))
     (vox-test-session
       (insert "prefix|suffix")
@@ -317,19 +328,16 @@
              (before-point (point))
              (before-undo buffer-undo-list))
         (setf (vox-session-sink session) sink)
-        (cl-letf (((symbol-function 'get-buffer-window-list)
-                   (lambda (&rest _) (list (selected-window))))
-                  ((symbol-function 'window-body-width) (lambda (&rest _) 20))
-                  ((symbol-function 'window-hscroll) (lambda (_) 0)))
-          (should (= (vox-ui--preview-columns session) 12))
-          (funcall preview session "hypothesis" 'recording))
+        (funcall preview session "hypothesis" 'recording)
         (should (= (point) before-point))
         (should (equal buffer-undo-list before-undo))
         (should (equal (list (point-min) (point-max)) bounds))
-        (let ((overlay (car (append (car (overlay-lists)) (cdr (overlay-lists))))))
+        (let* ((overlay (car (append (car (overlay-lists)) (cdr (overlay-lists)))))
+               (display (overlay-get overlay 'after-string)))
           (should overlay)
           (should (= (overlay-start overlay) 8))
-          (should (= (overlay-end overlay) 8)))
+          (should (= (overlay-end overlay) 8))
+          (should (equal (substring-no-properties display) "hypothesis")))
         (save-restriction
           (widen)
           (should (equal (buffer-string) "prefix|suffix")))))))
@@ -415,20 +423,24 @@
     (should (equal commits '("")))
     (should (eq (vox-session-state session) 'completed))))
 
-(ert-deftest vox-ui-narrow-window-cjk-preview-stays-on-one-line ()
+(ert-deftest vox-ui-narrow-window-cjk-preview-keeps-whole-text ()
   :tags '(vox-unit)
+  ;; A window too narrow for the hypothesis no longer truncates it; the overlay
+  ;; carries the full text and keeps a single logical line for CJK and emoji.
   (vox-test-session
     (let* ((sink (vox-make-buffer-sink)) (preview (plist-get sink :on-preview))
-           (text (concat (string #x4e2d #x6587 #x1f399) "\nsecond line")))
+           (text (concat (string #x4e2d #x6587 #x1f399) "\nsecond line"))
+           (expected "中文\U0001f399 second line"))
       (setf (vox-session-sink session) sink)
-      (cl-letf (((symbol-function 'get-buffer-window-list) (lambda (&rest _) (list (selected-window))))
-                ((symbol-function 'window-body-width) (lambda (&rest _) 6))
-                ((symbol-function 'window-hscroll) (lambda (_) 0)))
+      (cl-letf (((symbol-function 'get-buffer-window-list)
+                 (lambda (&rest _) (list (selected-window))))
+                ((symbol-function 'window-body-width) (lambda (&rest _) 6)))
         (funcall preview session text 'recording)
         (let* ((overlay (car (append (car (overlay-lists)) (cdr (overlay-lists)))))
                (display (overlay-get overlay 'after-string)))
           (should overlay)
-          (should (<= (string-width display) 5))
+          (should (equal (substring-no-properties display) expected))
+          (should (> (string-width display) 6))
           (should-not (string-match-p "\n" display))
           (should (equal (buffer-string) "")))))))
 
