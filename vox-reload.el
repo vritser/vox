@@ -101,6 +101,8 @@ and changes to retained state initialization require an Emacs restart."
   (when vox--starting (user-error "Wait for Vox startup to finish before reloading"))
   (when (vox-current-session)
     (user-error "Finish or cancel the active Vox session before reloading"))
+  (when vox-tts--active
+    (user-error "Stop Vox speech output before reloading"))
   (when (or (active-minibuffer-window) vox-device--busy vox-device--selecting)
     (user-error "Finish device selection or the active minibuffer before reloading"))
   (let ((directory (file-name-as-directory

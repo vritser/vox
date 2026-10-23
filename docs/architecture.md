@@ -7,14 +7,17 @@ root; the development layout does not add a runtime dependency or change the API
 
 | Module | Owns |
 | --- | --- |
-| [vox.el](../vox.el) | Public commands, `vox-select` pair completion and reentry checks, explicit transcript recovery |
-| [vox-backend.el](../vox-backend.el) | Backend objects/factories, `vox-backends` directory and `vox-selection` resolution, registration/contracts, JSON helpers, lazy credentials, endpoint validation |
+| [vox.el](../vox.el) | Public commands, `vox-asr-select` pair completion and reentry checks, explicit transcript recovery |
+| [vox-backend.el](../vox-backend.el) | Shared providers, capability resolution, `vox-backends` directory and ASR selection, registration/contracts, JSON helpers, lazy credentials, endpoint validation |
 | [vox-core.el](../vox-core.el) | Session lifecycle, callback generations, transcript reconciliation, PCM queue/chunker, automatic stop requests, completion and cleanup |
 | [vox-log.el](../vox-log.el) | Opt-in bounded event metadata, strict safe-field schema, in-memory snapshots and explicit clearing |
 | [vox-activity.el](../vox-activity.el) | Pure bounded PCM energy analysis, 20 ms windows, speech arming and quiet-duration eligibility; no timers, I/O, or transcript decisions |
 | [vox-device.el](../vox-device.el) | On-demand bounded FFmpeg listings, platform parsers, singleton auto-selection, multiple-input completion and opt-in persistence |
 | [vox-doctor.el](../vox-doctor.el) | Read-only capability and configuration report; no credentials, capture, device listing, connection or file output |
 | [vox-audio.el](../vox-audio.el) | FFmpeg capture process, binary PCM delivery, stop-to-sentinel handling |
+| [vox-tts.el](../vox-tts.el) | TTS selection, API adapters, CLI synthesis, bounded audio, playback ownership and cancellation |
+| [vox-tts-doubao.el](../vox-tts-doubao.el) | Bidirectional Doubao TTS framing, connection/session handshake, incremental text and cancellation |
+| [vox-tts-qwen.el](../vox-tts-qwen.el) | Qwen Realtime session configuration, incremental text, correlated PCM responses and buffer clearing |
 | [vox-transport.el](../vox-transport.el) | Guarded WebSocket I/O, fragments, message limits, TLS and asynchronous-handshake compatibility |
 | [vox-backend-qwen.el](../vox-backend-qwen.el) | Qwen VAD configuration, captured backend language on provider requests, normalized recognition events |
 | [vox-backend-qwen-audio.el](../vox-backend-qwen-audio.el) | Qwen Audio run-task protocol, task correlation, binary PCM, bounded sentence finality and task completion |
@@ -74,16 +77,21 @@ public commands -> session core -> backend contract -> provider / CLI
   trigger OS permission UI, and a sole input can be a system-audio monitor.
   Programmatic/headless startup and self-recording CLI do not automatically
   discover, select, or prompt for devices.
-- `vox-selection` is the sole next-session choice: nil resolves the first directory
-  entry/model, a name/model pair resolves exactly, and a registered protocol symbol
-  resolves that backend with no model choice. Directory names are unique and a
+- `vox-backends` contains shared `vox-provider` objects with host/key defaults
+  and optional ASR/TTS plists. `vox-backend-capability` creates a detached runtime
+  `vox-backend` record with the selected direction's protocol, endpoint, models,
+  credentials and options. Named CLI capabilities capture separate argv lists.
+  Both capabilities are validated before any selection. `vox-asr-selection` and
+  `vox-tts-selection` are independent: nil resolves the first service supporting
+  that direction, and explicit pairs resolve exactly. ASR also accepts registered
+  protocol symbols with their existing extension contracts. Directory names are unique and a
   malformed entry blocks every resolution. Explicit backend/core APIs bypass this
   selection. Completion validates snapshots and rejects reentrant configuration
   changes without overwriting newer choices; it never connects or reads credentials.
 - Backend factories are pure configuration construction. `vox-make-qwen` accepts
-  `:language` as a string or nil (the default, automatic detection). The shared
+  `:language` within `:asr` as a string or nil (automatic detection). The resolved
   `vox-backend` struct owns the language field; the Qwen adapters use it on the wire,
-  omitting the hint for nil. `vox-make-qwen-audio` uses the same field for a
+  omitting the hint for nil. ASR `:protocol qwen-audio` uses the same field for a
   one-element `language_hints` array in `run-task`, not Realtime session events.
   There is no global `vox-qwen-language` or fallback,
   and no new language option for Doubao or the CLI. Core captures a detached
@@ -99,6 +107,33 @@ public commands -> session core -> backend contract -> provider / CLI
   sessions, not the snapshot captured before those callbacks.
 - Loading Vox is silent and does not start capture or connect. Backend registration
   is package setup, not permission to send audio.
+- Speech output has one separate owner, guarded by session identity and generation.
+  `vox-speak` replaces previous speech, refuses ASR ownership/startup, and captures
+  configuration before key functions or endpoint prompts. ASR core startup cancels
+  TTS before claiming the recording session. Reload refuses active TTS. API synthesis
+  uses the shared guarded WebSocket transport. Qwen PCM (wrapped in one streaming
+  WAV header), Doubao MP3 and CLI stdout feed a bounded player FIFO.
+  A timer sends at most 4096
+  bytes per turn to one persistent player, outside receive callbacks. A send latch
+  preserves order under reentry and charges in-flight bytes against the queue cap.
+  Successful protocol completion or zero CLI exit, nonempty audio, queue drain
+  and player EOF precede successful player exit. Late failure stops partial playback.
+  Separate synthesis/playback timers overlap; cancellation clears both timers,
+  the pump, queues and owned processes. Native writes may delay interruption.
+  The player receives bytes over stdin; neither text nor audio is saved by Vox.
+  Custom hosts require approval before key lookup.
+  `vox-doctor` diagnoses both directions without running synthesis or playback;
+  TTS shares its pure selection, host policy and limit validation with startup.
+  Incremental text has a separate bounded FIFO and send latch; finish follows its
+  drain and cancellation drops it. Doubao waits for both handshake acknowledgements,
+  submits TaskRequest chunks and accepts SessionFinished only after FinishSession.
+  The same guarded transport accepts opaque owners through an explicit liveness
+  predicate without ASR session accessors; the ASR API retains its defaults.
+  Provider cancellation is best effort, with no nested write or billing promise.
+  Qwen waits for session.updated before append, correlates response audio and
+  completion, and requires session.finished after session.finish. Cancellation
+  clears buffered text then closes; it does not finish/flush the session.
+  CLI stdin remains open until producer EOF. Single-request HTTP TTS is removed.
 - Qwen task-streaming is a distinct registered protocol, not model-name routing
   inside Realtime. It waits for a matching `task-started`, sends raw binary PCM,
   and accepts `task-finished` only after local finish and no provisional sentence
@@ -109,7 +144,7 @@ public commands -> session core -> backend contract -> provider / CLI
   Core/public startup and device discovery refuse reentry while reload is active.
   Exact source loads preserve settings, session generations and retained history;
   they do not migrate structures, unload definitions, or restart sessions. Adding
-  the backend language field therefore requires an Emacs restart, not a
+  fields or switching existing configuration to shared providers requires an Emacs restart, not a
   `vox-reload` migration.
 - Event logging is disabled by default. Its input boundary accepts fixed event
   names/enums and bounded integers only, never raw provider data, text, PCM,

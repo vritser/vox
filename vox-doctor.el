@@ -55,20 +55,34 @@ STATUS must be one of `vox-doctor--statuses'."
   "Return selection context without side effects.
 Collect the validated directory and selection errors instead of signaling,
 so the report can show both the directory and the selection state."
-  (let (candidates selection methods configuration
-        candidates-error selection-error)
+  (let (candidates selection methods configuration asr-disabled tts-disabled
+        tts-selection tts-error candidates-error selection-error)
     (condition-case err
-        (setq candidates (vox--backend-candidates))
+        (setq candidates (vox--backend-candidates 'all))
       (error (setq candidates-error (error-message-string err))))
+    (unless candidates-error
+      (setq asr-disabled (and (null vox-asr-selection)
+                              (not (cl-some (lambda (entry)
+                                              (vox-backend-supports-p (cdr entry) 'asr))
+                                            candidates)))
+            tts-disabled (and (null vox-tts-selection)
+                              (not (cl-some (lambda (entry)
+                                              (vox-backend-supports-p (cdr entry) 'tts))
+                                            candidates)))))
     (condition-case err
         (let ((resolved (vox--resolve-selection)))
           (setq selection resolved
                 methods (vox-backend-methods (car resolved) (cdr resolved))
                 configuration (plist-get methods :configuration)))
       (error (setq selection-error (error-message-string err))))
+    (unless tts-disabled
+      (condition-case nil
+          (setq tts-selection (vox-tts--resolve))
+        (error (setq tts-error "Invalid TTS selection or capability configuration"))))
     (list :candidates candidates :candidates-error candidates-error
           :selection selection :selection-error selection-error
-          :methods methods :configuration configuration)))
+          :methods methods :configuration configuration :asr-disabled asr-disabled
+          :tts-disabled tts-disabled :tts-selection tts-selection :tts-error tts-error)))
 
 (defun vox-doctor--emacs ()
   "Check the running Emacs version."
@@ -166,11 +180,11 @@ CONTEXT is the selection context from `vox-doctor--context'."
                                     (length candidates)))))))
 
 (defun vox-doctor--selection (context)
-  "Check the resolved `vox-selection' in CONTEXT."
+  "Check the resolved `vox-asr-selection' in CONTEXT."
   (vox-doctor--check 'selection
     (if-let* ((reason (plist-get context :selection-error)))
         (vox-doctor--result 'selection 'fail reason
-                            "Update `vox-selection' or run M-x vox-select.")
+                            "Update `vox-asr-selection' or run M-x vox-asr-select.")
       (let ((backend (car (plist-get context :selection)))
             (model (cdr (plist-get context :selection)))
             (configuration (plist-get context :configuration)))
@@ -191,7 +205,7 @@ CONTEXT is the selection context from `vox-doctor--context'."
 This never approves a custom host or opens a connection."
   (vox-doctor--check 'endpoint
     (let ((configuration (plist-get context :configuration)))
-      (if (null configuration)
+      (if (or (null configuration) (eq (vox-backend-type configuration) 'cli))
           (vox-doctor--result 'endpoint 'skip
                               "not applicable to the selected backend")
         (let* ((model (cdr (plist-get context :selection)))
@@ -211,27 +225,111 @@ This never approves a custom host or opens a connection."
              (format "custom host %s needs per-connection confirmation" host)
              "Custom endpoints are trusted only after explicit approval.")))))))
 
-(defun vox-doctor--key (context)
+(defun vox-doctor--key (context &optional id)
   "Report the credential source kind in CONTEXT without resolving it."
-  (vox-doctor--check 'key
+  (setq id (or id 'key))
+  (vox-doctor--check id
     (let ((configuration (plist-get context :configuration)))
-      (if (null configuration)
-          (vox-doctor--result 'key 'skip
+      (if (or (null configuration) (memq (vox-backend-type configuration) '(cli tts-cli)))
+          (vox-doctor--result id 'skip
                               "no remote credential for the selected backend")
         (let ((key (vox-backend-key configuration)))
           (cond
            ((null key)
             (vox-doctor--result
-             'key 'ok "auth-source (login apikey) for the connection host"))
+             id 'ok "auth-source (login apikey) for the connection host"))
            ((stringp key)
             (vox-doctor--result
-             'key 'warn "literal key string in `vox-backends'; value not shown"
+             id 'warn "literal key string in `vox-backends'; value not shown"
              "Prefer auth-source or a `:key' function."))
            ((functionp key)
             (vox-doctor--result
-             'key 'ok "credential function; not called by this check"))
+             id 'ok "credential function; not called by this check"))
            (t
-            (vox-doctor--result 'key 'fail "invalid `:key' source"))))))))
+            (vox-doctor--result id 'fail "invalid `:key' source"))))))))
+
+(defun vox-doctor--tts-command (id command)
+  "Check COMMAND argv and executable availability for ID without starting it."
+  (condition-case nil
+      (progn
+        (vox-tts--argv command)
+        (vox-doctor--result
+         id 'ok "argv valid; executable found (arguments not shown)"
+         "Executable lookup only; stdin compatibility and audible output are not tested."))
+    (error
+     (vox-doctor--result
+      id 'fail "invalid argv or executable unavailable"
+      (if (eq id 'tts-player)
+          "Set `vox-tts-player-command' to an installed player reading encoded audio from stdin."
+        "Set the selected TTS capability's :command to an installed synthesis CLI.")))))
+
+(defun vox-doctor--tts-endpoint (configuration)
+  "Classify CONFIGURATION's secure destination without contacting it."
+  (vox-doctor--check 'tts-endpoint
+    (if (or (null configuration) (eq (vox-backend-type configuration) 'tts-cli))
+        (vox-doctor--result 'tts-endpoint 'skip "no resolved API destination")
+      (let* ((scheme "wss")
+             (url (url-generic-parse-url
+                   (concat scheme "://" (vox-backend-host configuration)
+                           (vox-backend-endpoint configuration))))
+             (host (url-host url))
+             (official (vox-tts--official-hosts (vox-backend-type configuration))))
+        (if (and (member (downcase host) official) (memq (url-portspec url) '(nil 443)))
+            (vox-doctor--result 'tts-endpoint 'ok (format "official host %s over %s" host (upcase scheme)))
+          (vox-doctor--result
+           'tts-endpoint 'warn (format "custom %s destination needs per-connection confirmation" (upcase scheme))
+           "No approval or connection attempted; custom ports also require confirmation."))))))
+
+(defun vox-doctor--tts-session ()
+  "Report TTS ownership without cancelling playback or changing a session."
+  (vox-doctor--check 'tts-session
+    (cond
+     ((or vox--reloading vox--starting vox--active-session)
+      (vox-doctor--result 'tts-session 'warn "ASR startup, recording or reload blocks speech"
+                          "Finish the current operation before speaking."))
+     (vox-tts--active
+      (vox-doctor--result
+       'tts-session 'ok
+       (format "speech output is %s" (vox-tts--session-state vox-tts--active))
+       "Use vox-speak-stop to cancel; audible output is not verified."))
+     (t (vox-doctor--result 'tts-session 'ok "speech output is idle")))))
+
+(defun vox-doctor--tts-checks (context)
+  "Return TTS readiness results from CONTEXT without network or playback I/O."
+  (let* ((disabled (plist-get context :tts-disabled))
+         (selection (plist-get context :tts-selection))
+         (configuration (car selection))
+         (reason (plist-get context :tts-error))
+         (ids '(tts-selection tts-player tts-cli tts-endpoint tts-key tts-limits tts-session)))
+    (if disabled
+        (mapcar (lambda (id)
+                  (if (and (eq id 'tts-session) vox-tts--active)
+                      (vox-doctor--tts-session)
+                    (vox-doctor--result id 'skip "TTS not configured; speech output is optional")))
+                ids)
+      (list
+       (if reason
+           (vox-doctor--result 'tts-selection 'fail reason
+                               "Check `vox-backends' capabilities and `vox-tts-selection'.")
+         (vox-doctor--result
+          'tts-selection 'ok
+          (format "%s / %s%s" (vox-backend-name configuration) (or (cdr selection) "CLI")
+                  (if (vox-backend-voice configuration)
+                      (format "; voice %s" (vox-backend-voice configuration)) ""))))
+       (vox-doctor--tts-command 'tts-player vox-tts-player-command)
+       (if (and configuration (eq (vox-backend-type configuration) 'tts-cli))
+           (vox-doctor--tts-command 'tts-cli (vox-backend-command configuration))
+         (vox-doctor--result 'tts-cli 'skip "no resolved TTS CLI selected"))
+       (vox-doctor--tts-endpoint configuration)
+       (vox-doctor--key (list :configuration configuration) 'tts-key)
+       (vox-doctor--check 'tts-limits
+         (let ((error (vox-tts--limits-error)))
+           (if error
+               (vox-doctor--result 'tts-limits 'fail error "Correct the named TTS option.")
+             (vox-doctor--result
+              'tts-limits 'ok "text, audio, response, playback queue and timeout limits are valid"
+              "Provider and voice/resource availability require a separate live test."))))
+       (vox-doctor--tts-session)))))
 
 (defun vox-doctor--input ()
   "Check `vox-audio-input' shape without showing device values."
@@ -335,8 +433,8 @@ Mirrors `vox-core-start': a self-recording backend always runs manually."
 Each result has :id, :status (`ok', `warn', `fail' or `skip'), :summary,
 and an optional :hint.  This is read-only: it resolves no credentials,
 starts no process, opens no connection, and writes no file."
-  (let ((context (vox-doctor--context)))
-    (list (vox-doctor--emacs)
+  (let* ((context (vox-doctor--context))
+         (results (list (vox-doctor--emacs)
           (vox-doctor--websocket)
           (vox-doctor--tls)
           (vox-doctor--zlib context)
@@ -351,6 +449,24 @@ starts no process, opens no connection, and writes no file."
           (vox-doctor--session)
           (vox-doctor--log)
           (vox-doctor--devices))))
+    ;; TTS-only directories are valid.  ASR-specific prerequisites should not
+    ;; make their report fail unless the user explicitly selected an ASR backend.
+    (when (plist-get context :asr-disabled)
+      (setq results
+            (mapcar
+             (lambda (result)
+               (let ((id (plist-get result :id)))
+                 (if (or (memq id '(zlib ffmpeg selection endpoint key input stop limits devices))
+                         (and (eq id 'websocket)
+                              (let ((tts (car (plist-get context :tts-selection))))
+                                (not (and tts (memq (vox-backend-type tts) '(tts-doubao-ws tts-qwen-realtime))))))
+                         (and (eq id 'tls)
+                              (let ((tts (car (plist-get context :tts-selection))))
+                                (and tts (eq (vox-backend-type tts) 'tts-cli)))))
+                     (vox-doctor--result id 'skip "not required by the configured speech capabilities")
+                   result)))
+             results)))
+    (append results (vox-doctor--tts-checks context))))
 
 (defun vox-doctor--count (status results)
   "Return how many RESULTS have STATUS."

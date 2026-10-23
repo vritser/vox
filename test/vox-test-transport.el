@@ -4,12 +4,16 @@
 (require 'cl-lib)
 (require 'vox-transport)
 
+(defvar vox-transport-test--owner-predicate nil
+  "Optional synthetic owner predicate for the generic transport path.")
+
 (defmacro vox-transport-test--connection (&rest body)
   "Run BODY with real upstream framing and a mocked native network pipe."
   (declare (indent 0) (debug t))
   `(progn
      (skip-unless (require 'websocket nil t))
-     (let* ((session (vox--make-session :id "transport-test" :generation 1 :state 'connecting))
+     (let* ((session (if vox-transport-test--owner-predicate (list 'opaque-owner)
+                       (vox--make-session :id "transport-test" :generation 1 :state 'connecting)))
             (vox--active-session session)
             (socket (make-pipe-process :name "vox-test-network" :buffer nil
                                        :coding 'binary :noquery t))
@@ -46,7 +50,8 @@
                        (lambda () (push t opened))
                        (lambda (payload opcode) (push (list payload opcode) messages))
                        (lambda (safe) (push safe errors))
-                       (lambda () (push t closed))))
+                       (lambda () (push t closed))
+                       vox-transport-test--owner-predicate 7))
              (ignore writes opened messages errors closed tls-verified asynchronous ws)
              ,@body)
          (vox-transport-close session)
@@ -729,6 +734,26 @@
       (should (equal messages '(("before-close" text))))
       (should (equal closed '(t)))
       (should-not (vox-session-websocket session)))))
+
+(ert-deftest vox-transport-opaque-owner-uses-predicate-with-native-framing ()
+  :tags '(vox-unit)
+  (let ((alive t))
+    (let ((vox-transport-test--owner-predicate (lambda () alive)))
+      (vox-transport-test--connection
+        (vox-transport-test--upgrade)
+        (should (equal opened '(t)))
+        (should (= (vox-transport--context-generation (gethash session vox-transport--contexts)) 7))
+        (funcall (process-filter socket) socket (concat (unibyte-string 130 3) "abc"))
+        (should (equal messages '(("abc" binary))))
+        (vox-transport-send-binary session "outbound")
+        (should (>= (length writes) 2))
+        (setq alive nil)
+        (funcall (process-filter socket) socket (concat (unibyte-string 130 3) "old"))
+        (should (equal messages '(("abc" binary))))
+        (should-not errors)
+        (should-error (vox-transport-send-binary session "stale"))
+        (vox-transport-close session)
+        (should-not (gethash session vox-transport--contexts))))))
 
 (provide 'vox-test-transport)
 ;;; vox-test-transport.el ends here

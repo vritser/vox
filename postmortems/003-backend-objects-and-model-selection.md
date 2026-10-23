@@ -11,6 +11,9 @@ _Date: 2026-10-20. Status: Implemented, uncommitted work based on `3afd60c`._
 > Language configuration superseded by [012](012-automatic-recognition-language.md):
 > Qwen language belongs to each backend constructor, not a global option.
 
+> Configuration surface superseded by [018](018-shared-speech-service-configuration.md):
+> shared services use separate ASR/TTS capability plists and selection state.
+
 ## Background
 
 Provider API addresses, models and credential-source settings were spread across

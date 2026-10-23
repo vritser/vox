@@ -11,9 +11,9 @@
   "Run BODY with a fake provider and isolated session ownership."
   (declare (indent 0) (debug t))
   `(let ((vox--backends (copy-hash-table vox--backends))
-         (vox--active-session nil) (vox--last-session nil) (vox-selection nil)
+         (vox--active-session nil) (vox--last-session nil) (vox-asr-selection nil)
          (vox--generation 0)
-         (backend (vox-make-qwen "Synthetic" :models '(first second)))
+         (backend (vox-test-make-qwen "Synthetic" :models '(first second)))
          (connect-action #'ignore) (closes 0) (cancels 0) connected)
      (vox-register-backend
       'qwen (list :connect (lambda (session &rest _)
@@ -34,7 +34,7 @@
             backend (list :on-state
                           (lambda (_ state)
                             (when (eq state 'connecting)
-                              (setq vox-selection '("Synthetic" "second"))
+                              (setq vox-asr-selection '("Synthetic" "second"))
                               (aset (car (vox-backend-models backend)) 0 ?X)
                               (setf (vox-backend-host backend) "changed.example")))))))
       (should (eq connected session))
@@ -48,7 +48,7 @@
 (ert-deftest vox-model-core-explicit-model-and-independent-default ()
   :tags '(vox-unit)
   (vox-model-test--session
-    (setq vox-selection '("Missing" invalid))
+    (setq vox-asr-selection '("Missing" invalid))
     (let ((session (vox-core-start backend nil nil nil 'second)))
       (should (equal (plist-get (vox-session-methods session) :model) "second")))
     (vox-core-cancel)

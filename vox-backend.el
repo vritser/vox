@@ -14,12 +14,16 @@
 (require 'url-parse)
 (require 'url-util)
 
-(defgroup vox nil "Native streaming speech input." :group 'multimedia :prefix "vox-")
+(defgroup vox nil "Native speech input and output." :group 'multimedia :prefix "vox-")
 (defvar vox--backends (make-hash-table :test #'eq))
 
 (cl-defstruct (vox-backend (:constructor vox--make-backend))
-  "Connection and recognition configuration; credentials resolve on connect."
-  name type host endpoint models key resource-id language)
+	      "Resolved connection for one capability; credentials resolve on connect."
+	      name type host endpoint models key resource-id language voice command)
+
+(cl-defstruct (vox-provider (:constructor vox--make-provider))
+	      "Shared service defaults and optional ASR/TTS capability plists."
+	      name host key asr tts)
 
 (defun vox--backend-id (value &optional what)
   "Return a validated, copied string for identifier VALUE.
@@ -60,8 +64,10 @@ WHAT names the field in the error message, defaulting to \"identifier\"."
 Registered protocol symbols remain symbols.  A literal key string is copied,
 key functions retain identity, and neither is invoked here.  Configuration
 records contain no resolved key."
-  (if (symbolp backend)
-      backend
+  (cond
+   ((symbolp backend) backend)
+   ((vox-provider-p backend) (vox-provider-snapshot backend))
+   (t
     (unless (vox-backend-p backend)
       (user-error "Invalid Vox backend configuration"))
     (unless (and (symbolp (vox-backend-type backend))
@@ -69,9 +75,11 @@ records contain no resolved key."
       (user-error "Invalid Vox backend type"))
     (unless (stringp (vox-backend-name backend))
       (user-error "Invalid Vox backend name"))
-    (unless (vox--backend-host-p (vox-backend-host backend))
+    (unless (or (memq (vox-backend-type backend) '(cli tts-cli))
+                (vox--backend-host-p (vox-backend-host backend)))
       (user-error "Invalid Vox backend host"))
-    (unless (vox--backend-endpoint-p (vox-backend-endpoint backend))
+    (unless (or (memq (vox-backend-type backend) '(cli tts-cli))
+                (vox--backend-endpoint-p (vox-backend-endpoint backend)))
       (user-error "Invalid Vox backend endpoint"))
     (let ((key (vox-backend-key backend)))
       (unless (or (null key)
@@ -80,8 +88,10 @@ records contain no resolved key."
                        (not (string-match-p "[\x00-\x1f\x7f-\x9f]" key)))
                   (functionp key))
         (user-error "Invalid Vox backend key")))
-    (unless (and (proper-list-p (vox-backend-models backend))
-                 (vox-backend-models backend))
+    (unless (if (memq (vox-backend-type backend) '(cli tts-cli))
+                (null (vox-backend-models backend))
+              (and (proper-list-p (vox-backend-models backend))
+                   (vox-backend-models backend)))
       (user-error "Invalid Vox backend models"))
     (let ((name (vox--backend-id (vox-backend-name backend) "backend name"))
           (models (mapcar (lambda (model)
@@ -108,139 +118,17 @@ records contain no resolved key."
        :models models
        :key (if (stringp key) (copy-sequence key) key)
        :resource-id (and resource (copy-sequence resource))
-       :language (and language (copy-sequence language))))))
-
-;;;###autoload
-(cl-defun vox-make-qwen
-    (name &key (host "dashscope.aliyuncs.com")
-          (endpoint "/api-ws/v1/realtime")
-          (models '(qwen3-asr-flash-realtime)) key language)
-  "Make a Qwen configuration named NAME without resolving credentials.
-NAME is a display string.  HOST and ENDPOINT select the WSS destination.
-MODELS lists allowed model IDs.  KEY is nil for auth-source lookup, a literal
-key string, or a zero-argument function.  LANGUAGE is nil (automatic detection)
-or a model-supported language code string, such as \"en\" or \"zh\".
-
-(fn NAME &key HOST ENDPOINT MODELS KEY LANGUAGE)"
-  (vox-backend-snapshot
-   (vox--make-backend :name name :type 'qwen :host host :endpoint endpoint
-                      :models models :key key :language language)))
-
-;;;###autoload
-(cl-defun vox-make-qwen-audio
-    (name &key (host "dashscope.aliyuncs.com")
-          (endpoint "/api-ws/v1/inference")
-          (models '(qwen-audio-3.0-asr-flash-streaming)) key language)
-  "Make a Qwen task-streaming configuration named NAME.
-HOST and ENDPOINT select the WSS destination.  MODELS lists allowed model
-IDs, sent in run-task rather than the URL.  KEY is nil for auth-source,
-a literal key string, or a zero-argument function.  LANGUAGE is nil for
-automatic detection, or one language code sent as language_hints.
-This protocol is distinct from the Realtime API used by `vox-make-qwen'.
-
-(fn NAME &key HOST ENDPOINT MODELS KEY LANGUAGE)"
-  (vox-backend-snapshot
-   (vox--make-backend :name name :type 'qwen-audio :host host
-                      :endpoint endpoint :models models :key key
-                      :language language)))
-
-;;;###autoload
-(cl-defun vox-make-doubao
-    (name &key (host "openspeech.bytedance.com")
-          (endpoint "/api/v3/sauc/bigmodel_async") (models '(bigmodel))
-          key (resource-id "volc.seedasr.sauc.duration"))
-  "Make a Doubao configuration named NAME without resolving credentials.
-NAME is a display string.  HOST and ENDPOINT select the WSS destination;
-MODELS lists allowed model IDs.  KEY is nil for auth-source lookup, a literal
-key string, or a zero-argument function.  RESOURCE-ID selects the billing
-resource.
-
-(fn NAME &key HOST ENDPOINT MODELS KEY RESOURCE-ID)"
-  (vox-backend-snapshot
-   (vox--make-backend :name name :type 'doubao :host host :endpoint endpoint
-                      :models models :key key :resource-id resource-id)))
-
-(defvar vox-backends (list (vox-make-qwen "Qwen"))
-  "Directory of backend objects, in default and completion order.
-Configure with `vox-make-qwen', `vox-make-qwen-audio', or
-`vox-make-doubao'.  Names must be unique, case-sensitive strings.
-This is separate from the protocol registry.")
-
-(defvar vox-selection nil
-  "Backend/model choice for the next recording.
-Nil uses the first of `vox-backends' and its first model.  A two-element
-list (NAME MODEL) selects the backend named NAME; MODEL is nil for its
-first model, or an allowed symbol/string ID.  A registered protocol symbol
-selects that backend without a model choice: `cli', the built-in `qwen',
-`qwen-audio', or `doubao' defaults, or a registered extension.
-Use `vox-select' interactively.  Missing names, unregistered symbols, and
-invalid models are errors, never fallback requests.")
-
-(defun vox--resolve-selection ()
-  "Return a detached (BACKEND . MODEL) resolved from `vox-selection'.
-A directory entry yields a validated copy and model string; a registered
-protocol symbol yields that symbol with no model.  Validate the directory,
-registration, and model without callbacks or credential access."
-  (cond
-   ((null vox-selection)
-    (let* ((candidates (vox--backend-candidates))
-           (configuration (vox-backend-snapshot (cdr (car candidates)))))
-      (cons configuration (vox--backend-model configuration nil))))
-   ((symbolp vox-selection)
-    (unless (gethash vox-selection vox--backends)
-      (user-error "Vox backend %s is not registered; update vox-selection"
-                  vox-selection))
-    (cons vox-selection nil))
-   ((and (proper-list-p vox-selection)
-         (= (length vox-selection) 2)
-         (stringp (car vox-selection)))
-    (let* ((candidates (vox--backend-candidates))
-           (entry (assoc (car vox-selection) candidates)))
-      (unless entry
-        (user-error
-         "Vox backend name is missing from vox-backends; update vox-selection"))
-      (let ((configuration (vox-backend-snapshot (cdr entry))))
-        (cons configuration
-              (vox--backend-model configuration (cadr vox-selection))))))
-   (t
-    (user-error
-     "Invalid vox-selection; use nil, (NAME MODEL), or a registered backend symbol"))))
-
-(defun vox--backend-candidates ()
-  "Return a validated name-to-object alist for `vox-backends'.
-Copy names for completion, retaining the original objects as values.
-Reject non-object and duplicate entries without resolving credentials.
-Report failing entry positions so one broken entry is easy to find."
-  (unless (and (consp vox-backends) (proper-list-p vox-backends))
-    (user-error "Configure vox-backends with a nonempty list of backend objects"))
-  (let (candidates (index 0))
-    (dolist (backend vox-backends)
-      (cl-incf index)
-      (unless (vox-backend-p backend)
-        (user-error "vox-backends entry %d must be a backend object" index))
-      (let ((name (condition-case err
-                      (vox-backend-name (vox-backend-snapshot backend))
-                    (user-error
-                     (user-error "Invalid vox-backends entry %d: %s"
-                                 index (error-message-string err))))))
-        (let ((earlier (assoc name candidates)))
-          (when earlier
-            (user-error
-             "Duplicate Vox backend name: %s (entries %d and %d); use unique names in vox-backends"
-             name (1+ (cl-position earlier candidates :test #'eq)) index)))
-        (push (cons name backend) candidates)))
-    (nreverse candidates)))
-
-(defun vox--backend-model (configuration model)
-  "Resolve MODEL against validated CONFIGURATION's allowed models."
-  (let ((selected (vox--backend-id
-                   (or model (car (vox-backend-models configuration)))
-                   "model identifier")))
-    (unless (member selected (vox-backend-models configuration))
-      (user-error
-       "Vox model %s is not configured; add it to the backend's :models"
-       selected))
-    selected))
+       :language (and language (copy-sequence language))
+       :voice (when (memq (vox-backend-type backend) '(tts-qwen-realtime tts-doubao-ws))
+                (vox--backend-id (vox-backend-voice backend) "voice"))
+       :command (when (memq (vox-backend-type backend) '(cli tts-cli))
+                  (let ((command (vox-backend-command backend)))
+                    (unless (and (consp command) (proper-list-p command)
+                                 (cl-every (lambda (arg) (and (stringp arg)
+                                                              (not (string-match-p "\0" arg)))) command)
+                                 (not (string-empty-p (car command))))
+                      (user-error "Invalid Vox CLI argv"))
+                    (mapcar #'copy-sequence command))))))))
 
 (defun vox--backend-copy-tree (value)
   "Copy VALUE recursively while preserving function identity."
@@ -250,6 +138,229 @@ Report failing entry positions so one broken entry is easy to find."
                              (vox--backend-copy-tree (cdr value))))
         ((vectorp value) (apply #'vector (mapcar #'vox--backend-copy-tree value)))
         (t value)))
+
+(defconst vox--capability-defaults
+  '((qwen :endpoint "/api-ws/v1/realtime" :models (qwen3-asr-flash-realtime))
+    (qwen-audio :endpoint "/api-ws/v1/inference" :models (qwen-audio-3.0-asr-flash-streaming))
+    (doubao :endpoint "/api/v3/sauc/bigmodel_async" :models (bigmodel)
+            :resource-id "volc.seedasr.sauc.duration")
+    (tts-qwen-realtime :endpoint "/api-ws/v1/realtime"
+                       :models (qwen3-tts-flash-realtime) :voice "Cherry")
+    (tts-doubao-ws :endpoint "/api/v3/tts/bidirection"
+                   :resource-id "seed-tts-2.0" :voice "zh_female_vv_uranus_bigtts")
+    (cli) (tts-cli))
+  "Protocol defaults; copied into each resolved capability.")
+
+(defun vox--capability-options (options protocol)
+  "Normalize OPTIONS for default PROTOCOL without reading credentials."
+  (cond ((null options) nil)
+        ((eq options t) (list :protocol protocol))
+        ((and (proper-list-p options) (zerop (% (length options) 2)))
+         (unless (plist-member options :protocol)
+           (setq options (append (list :protocol protocol) options)))
+         options)
+        (t (user-error "Vox capability must be nil, t or a property list"))))
+
+(defun vox-provider--resolve (provider capability)
+  "Resolve PROVIDER's CAPABILITY to a detached runtime connection record."
+  (let* ((options (pcase capability
+                    ('asr (vox-provider-asr provider))
+                    ('tts (vox-provider-tts provider))
+                    (_ (user-error "Invalid Vox capability"))))
+         (protocol (plist-get options :protocol))
+         (defaults (cdr (assq protocol vox--capability-defaults)))
+         (allowed (if (eq capability 'asr) '(qwen qwen-audio doubao cli)
+                    '(tts-qwen-realtime tts-doubao-ws tts-cli)))
+         (option-keys
+          (if (memq protocol '(cli tts-cli)) '(:protocol :command)
+            (append '(:protocol :host :key :endpoint)
+                    (pcase protocol
+                      ((or 'qwen 'qwen-audio) '(:models :language))
+                      ('doubao '(:models :resource-id))
+                      ('tts-doubao-ws '(:resource-id :voice))
+                      (_ '(:models :voice))))))
+         seen)
+    (unless (and options (proper-list-p options) (zerop (% (length options) 2))
+                 (memq protocol allowed))
+      (user-error "Vox backend does not have a valid %s capability" capability))
+    (let ((tail options))
+      (while tail
+        (let ((key (pop tail)))
+          (pop tail)
+          (unless (and (memq key option-keys)
+                       (not (memq key seen)))
+            (user-error "Unknown or duplicate Vox capability option"))
+          (push key seen))))
+    (cl-labels ((value (key &optional fallback)
+                  (cond ((plist-member options key) (plist-get options key))
+                        ((plist-member defaults key) (plist-get defaults key))
+                        (t fallback))))
+	       (vox-backend-snapshot
+		(vox--make-backend
+		 :name (vox-provider-name provider) :type protocol
+		 :host (value :host (vox-provider-host provider))
+		 :key (value :key (vox-provider-key provider))
+		 :endpoint (value :endpoint) :language (value :language)
+		 :models (if (eq protocol 'tts-doubao-ws) (list (value :resource-id)) (value :models))
+		 :resource-id (value :resource-id) :voice (value :voice) :command (value :command))))))
+
+(defun vox-provider-snapshot (provider)
+  "Validate and copy PROVIDER and both capabilities without resolving keys."
+  (unless (stringp (vox-provider-name provider)) (user-error "Invalid Vox backend name"))
+  (let ((name (vox--backend-id (vox-provider-name provider) "backend name"))
+        (host (vox-provider-host provider)) (key (vox-provider-key provider)))
+    (unless (or (null host) (vox--backend-host-p host)) (user-error "Invalid Vox backend host"))
+    (unless (or (null key) (functionp key)
+                (and (stringp key) (not (string-empty-p key))
+                     (not (string-match-p "[\x00-\x1f\x7f-\x9f]" key))))
+      (user-error "Invalid Vox backend key"))
+    (unless (or (vox-provider-asr provider) (vox-provider-tts provider))
+      (user-error "Configure at least one Vox capability"))
+    (dolist (capability '(asr tts))
+      (when (if (eq capability 'asr) (vox-provider-asr provider) (vox-provider-tts provider))
+        (vox-provider--resolve provider capability)))
+    (vox--make-provider :name name :host (and host (copy-sequence host))
+                        :key (if (stringp key) (copy-sequence key) key)
+                        :asr (vox--backend-copy-tree (vox-provider-asr provider))
+                        :tts (vox--backend-copy-tree (vox-provider-tts provider)))))
+
+(defun vox-backend-supports-p (backend capability)
+  "Whether BACKEND offers CAPABILITY, without resolving credentials."
+  (if (vox-provider-p backend)
+      (if (eq capability 'asr) (vox-provider-asr backend) (vox-provider-tts backend))
+    (and (vox-backend-p backend)
+         (eq (if (memq (vox-backend-type backend) '(tts-qwen-realtime tts-doubao-ws tts-cli))
+                 'tts 'asr) capability))))
+
+(defun vox-backend-capability (backend capability)
+  "Validate BACKEND and return a detached connection for CAPABILITY."
+  (setq backend (vox-backend-snapshot backend))
+  (unless (vox-backend-supports-p backend capability)
+    (user-error "Vox backend does not support %s" capability))
+  (if (vox-provider-p backend) (vox-provider--resolve backend capability) backend))
+
+(defun vox-backend-config-name (backend)
+  "Return the name of shared or resolved BACKEND."
+  (if (vox-provider-p backend) (vox-provider-name backend) (vox-backend-name backend)))
+
+;;;###autoload
+(cl-defun vox-make-qwen (name &key (host "dashscope.aliyuncs.com") key (asr t) tts)
+	  "Make shared Qwen NAME with HOST, KEY and optional ASR/TTS capability plists.
+ASR defaults to Realtime; :protocol qwen-audio selects task streaming.
+TTS defaults to Qwen3-TTS Realtime WebSocket.  Nil disables a capability;
+t enables its defaults.  Capability :host and :key override the shared defaults."
+	  (vox-provider-snapshot
+	   (vox--make-provider :name name :host host :key key
+			       :asr (vox--capability-options asr 'qwen)
+			       :tts (vox--capability-options tts 'tts-qwen-realtime))))
+
+;;;###autoload
+(cl-defun vox-make-doubao (name &key (host "openspeech.bytedance.com") key (asr t) tts)
+	  "Make shared Doubao NAME with HOST, KEY and optional ASR/TTS plists.
+Set :resource-id independently inside each capability.
+TTS uses bidirectional WebSocket."
+	  (vox-provider-snapshot
+	   (vox--make-provider :name name :host host :key key
+			       :asr (vox--capability-options asr 'doubao)
+			       :tts (vox--capability-options tts 'tts-doubao-ws))))
+
+;;;###autoload
+(cl-defun vox-make-cli (name &key asr tts)
+	  "Make named CLI NAME with separate ASR and TTS :command argv lists.
+ASR uses Vox NDJSON v1; TTS receives UTF-8 text and returns encoded audio."
+	  (vox-provider-snapshot
+	   (vox--make-provider :name name :asr (vox--capability-options asr 'cli)
+			       :tts (vox--capability-options tts 'tts-cli))))
+
+(defvar vox-backends (list (vox-make-qwen "Qwen"))
+  "Shared service directory, in default and completion order.
+Configure with `vox-make-qwen', `vox-make-doubao'
+or `vox-make-cli'.  Names must be unique, case-sensitive strings.
+This is separate from the protocol registry.")
+
+(defvar vox-asr-selection nil
+  "Backend/model choice for the next recording.
+Nil uses the first ASR-capable entry in `vox-backends' and its first model.
+A two-element
+list (NAME MODEL) selects the backend named NAME; MODEL is nil for its
+first model, or an allowed symbol/string ID.  A registered protocol symbol
+selects that backend without a model choice: `cli', the built-in `qwen',
+`qwen-audio', or `doubao' defaults, or a registered extension.
+Use `vox-asr-select' interactively.  Missing names, unregistered symbols, and
+invalid models are errors, never fallback requests.")
+
+(defun vox--resolve-selection ()
+  "Return a detached (BACKEND . MODEL) resolved from `vox-asr-selection'.
+A directory entry yields a validated copy and model string; a registered
+protocol symbol yields that symbol with no model.  Validate the directory,
+registration, and model without callbacks or credential access."
+  (cond
+   ((null vox-asr-selection)
+    (let* ((candidates (vox--backend-candidates))
+           (configuration (vox-backend-capability (cdr (car candidates)) 'asr)))
+      (cons configuration (vox--backend-model configuration nil))))
+   ((symbolp vox-asr-selection)
+    (unless (gethash vox-asr-selection vox--backends)
+      (user-error "Vox backend %s is not registered; update vox-asr-selection"
+                  vox-asr-selection))
+    (cons vox-asr-selection nil))
+   ((and (proper-list-p vox-asr-selection)
+         (= (length vox-asr-selection) 2)
+         (stringp (car vox-asr-selection)))
+    (let* ((candidates (vox--backend-candidates))
+           (entry (assoc (car vox-asr-selection) candidates)))
+      (unless entry
+        (user-error
+         "Vox backend name is missing from vox-backends; update vox-asr-selection"))
+      (let ((configuration (vox-backend-capability (cdr entry) 'asr)))
+        (cons configuration
+              (vox--backend-model configuration (cadr vox-asr-selection))))))
+   (t
+    (user-error
+     "Invalid vox-asr-selection; use nil, (NAME MODEL), or a registered backend symbol"))))
+
+(defun vox--backend-candidates (&optional capability)
+  "Return a validated name-to-object alist for `vox-backends'.
+CAPABILITY defaults to ASR; `all' includes every configured service.
+Copy names for completion, retaining the original objects as values.
+Reject non-object and duplicate entries without resolving credentials.
+Report failing entry positions so one broken entry is easy to find."
+  (unless (and (consp vox-backends) (proper-list-p vox-backends))
+    (user-error "Configure vox-backends with a nonempty list of backend objects"))
+  (let (candidates (index 0))
+    (dolist (backend vox-backends)
+      (cl-incf index)
+      (unless (or (vox-provider-p backend) (vox-backend-p backend))
+        (user-error "vox-backends entry %d must be a backend object" index))
+      (let ((name (condition-case err
+                      (vox-backend-config-name (vox-backend-snapshot backend))
+                    (user-error
+                     (user-error "Invalid vox-backends entry %d: %s"
+                                 index (error-message-string err))))))
+        (let ((earlier (assoc name candidates)))
+          (when earlier
+            (user-error
+             "Duplicate Vox backend name: %s (entries %d and %d); use unique names in vox-backends"
+             name (1+ (cl-position earlier candidates :test #'eq)) index)))
+        (push (cons name backend) candidates)))
+    (setq candidates (nreverse candidates))
+    (if (eq capability 'all) candidates
+      (or (cl-remove-if-not (lambda (entry) (vox-backend-supports-p (cdr entry) (or capability 'asr)))
+                            candidates)
+          (user-error "No Vox backend supports %s" (or capability 'asr))))))
+
+(defun vox--backend-model (configuration model)
+  "Resolve MODEL against validated CONFIGURATION's allowed models."
+  (if (memq (vox-backend-type configuration) '(cli tts-cli))
+      (progn (when model (user-error "CLI capabilities have no model")) nil)
+    (let ((selected (vox--backend-id
+                     (or model (car (vox-backend-models configuration)))
+                     "model identifier")))
+      (unless (member selected (vox-backend-models configuration))
+	(user-error
+	 "Vox model %s is not configured; add it to the backend's :models"
+	 selected))
+      selected)))
 
 (defun vox-register-backend (name methods)
   "Register NAME with METHODS, a plist of functions and capabilities.
@@ -271,16 +382,17 @@ plist unchanged."
 (defun vox-backend-methods (backend &optional model)
   "Return fresh registered methods for BACKEND, capturing selected MODEL.
 MODEL defaults to nil (the backend's first model), independently of
-`vox-selection'.  Configuration objects and built-in protocol
+`vox-asr-selection'.  Configuration objects and built-in protocol
 symbols carry a validated detached :configuration and a copied :model string.
 Other registered symbols ignore MODEL.  This operation never resolves
 credentials."
   (let* ((configuration
-          (cond ((vox-backend-p backend) (vox-backend-snapshot backend))
-                ((eq backend 'qwen) (vox-make-qwen "Qwen"))
-                 ((eq backend 'qwen-audio)
-                  (vox-make-qwen-audio "Qwen Audio"))
-                ((eq backend 'doubao) (vox-make-doubao "Doubao"))))
+          (cond ((or (vox-provider-p backend) (vox-backend-p backend))
+                 (vox-backend-capability backend 'asr))
+                ((eq backend 'qwen) (vox-backend-capability (vox-make-qwen "Qwen") 'asr))
+                ((eq backend 'qwen-audio)
+                 (vox-backend-capability (vox-make-qwen "Qwen Audio" :asr '(:protocol qwen-audio)) 'asr))
+                ((eq backend 'doubao) (vox-backend-capability (vox-make-doubao "Doubao") 'asr))))
          (type (if configuration (vox-backend-type configuration) backend))
          (registered (and (symbolp type) (gethash type vox--backends))))
     (unless registered (user-error "Unknown Vox backend"))
@@ -301,7 +413,7 @@ and Qwen task-streaming keep their endpoint and send the model in JSON."
     (user-error "Invalid Vox backend configuration"))
   (let ((selected (vox--backend-model configuration model))
         (endpoint (vox-backend-endpoint configuration)))
-    (when (eq (vox-backend-type configuration) 'qwen)
+    (when (memq (vox-backend-type configuration) '(qwen tts-qwen-realtime))
       (let* ((query-start (string-match "?" endpoint))
              (path (if query-start (substring endpoint 0 query-start) endpoint))
              (query (and query-start (substring endpoint (1+ query-start))))
@@ -314,9 +426,9 @@ and Qwen task-streaming keep their endpoint and send the model in JSON."
                parts))
         (setq endpoint
               (concat path "?" (mapconcat #'identity
-                                         (append parts (list (concat "model="
-                                                                     (url-hexify-string selected))))
-                                         "&")))))
+                                          (append parts (list (concat "model="
+                                                                      (url-hexify-string selected))))
+                                          "&")))))
     (concat "wss://" (vox-backend-host configuration) endpoint)))
 
 (defvar vox--auth-source-host nil

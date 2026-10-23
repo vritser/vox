@@ -182,7 +182,7 @@
 (ert-deftest vox-limits-qwen-final-items-released-on-overflow ()
   :tags '(vox-unit)
   (let ((vox--active-session nil) (vox--last-session nil)
-        (vox-max-segments 3) (vox-selection nil)
+        (vox-max-segments 3) (vox-asr-selection nil)
         message session (closed 0) (audio-started 0))
     (cl-letf (((symbol-function 'vox-api-key-from-auth-source)
                (lambda (&rest _) "synthetic-secret"))

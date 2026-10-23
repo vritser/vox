@@ -3,6 +3,8 @@
 See the [quick start](../README.md#quick-start) for loading Vox. Options belong to
 `M-x customize-group RET vox RET`; transport options also have a `vox-transport`
 group. Cloud recognition is not live-validated; Doubao remains experimental.
+For optional text-to-speech, see [speech output](speech-output.md); its backend
+selection and voices are independent of recognition.
 
 ## Example configuration
 
@@ -18,17 +20,15 @@ Install directly from Git with `use-package :vc`:
          (vox-make-qwen "DashScope"
            :key "YOUR_DASHSCOPE_API_KEY"
            :host "dashscope.aliyuncs.com"
-           :endpoint "/api-ws/v1/realtime"
-           :models '(qwen3-asr-flash-realtime)
-           :language nil) ; Auto-detect, or use "zh" / "en".
+           :asr '(:models (qwen3-asr-flash-realtime)
+                  :language nil)) ; Auto-detect, or use "zh" / "en".
          (vox-make-doubao "SeedASR"
            :key "YOUR_DOUBAO_API_KEY"
            :host "openspeech.bytedance.com"
-           :endpoint "/api/v3/sauc/bigmodel_async"
-           :models '(bigmodel)
-           :resource-id "volc.seedasr.sauc.duration"))
-        ;; Default backend/model; use M-x vox-select to switch later.
-        vox-selection '("DashScope" qwen3-asr-flash-realtime)))
+           :asr '(:models (bigmodel)
+                  :resource-id "volc.seedasr.sauc.duration")))
+        ;; Default backend/model; use M-x vox-asr-select to switch later.
+        vox-asr-selection '("DashScope" qwen3-asr-flash-realtime)))
 ```
 
 Replace the key for your selected backend; you can remove the unused entry.
@@ -46,8 +46,8 @@ its own audio.
 ## Recognition language
 
 Set recognition language when constructing each Qwen backend:
-`(vox-make-qwen NAME :language STRING-OR-NIL)` or
-`(vox-make-qwen-audio NAME :language STRING-OR-NIL)`.
+`(vox-make-qwen NAME :asr (list :language STRING-OR-NIL))`.
+For task streaming, add `:protocol 'qwen-audio` inside the ASR plist.
 Nil or an omitted `:language` means automatic detection: Vox omits the hint.
 Realtime sends `input_audio_transcription.language` in `session.update`;
 task-streaming sends a one-element `parameters.language_hints` array in `run-task`.
@@ -58,18 +58,18 @@ automatic, English, and Chinese configurations together:
 
 ```elisp
 (setq vox-backends
-      (list (vox-make-qwen "Qwen Auto" :language nil)
-            (vox-make-qwen "Qwen English" :language "en")
-            (vox-make-qwen "Qwen Chinese" :language "zh")))
-(setq vox-selection '("Qwen Auto" qwen3-asr-flash-realtime))
+      (list (vox-make-qwen "Qwen Auto" :asr '(:language nil))
+            (vox-make-qwen "Qwen English" :asr '(:language "en"))
+            (vox-make-qwen "Qwen Chinese" :asr '(:language "zh"))))
+(setq vox-asr-selection '("Qwen Auto" qwen3-asr-flash-realtime))
 ;; Select another configuration for the next recording:
-;; (setq vox-selection '("Qwen English" qwen3-asr-flash-realtime))
+;; (setq vox-asr-selection '("Qwen English" qwen3-asr-flash-realtime))
 ;; Or select Chinese:
-;; (setq vox-selection '("Qwen Chinese" qwen3-asr-flash-realtime))
+;; (setq vox-asr-selection '("Qwen Chinese" qwen3-asr-flash-realtime))
 ```
 
 The commented selection assignments are alternatives; choose one, or use the
-existing `M-x vox-select` backend/model picker. `(vox-make-qwen "Qwen Auto")` is equivalent
+existing `M-x vox-asr-select` backend/model picker. `(vox-make-qwen "Qwen Auto")` is equivalent
 to the explicit nil example. Each backend has its own independent language; no
 global language setting is consulted. Codes are passed through to Qwen; supported
 languages and recognition quality depend on the selected model.
@@ -81,9 +81,8 @@ later recording, not the startup/session already using that snapshot.
 
 **Migration:** remove `vox-qwen-language` from your init file and saved Customize
 settings; the global variable is removed without an alias or compatibility
-fallback. Put any explicit language on each relevant `vox-make-qwen` call, or
-omit `:language` for automatic detection. Restart Emacs after updating your
-configuration: the shared `vox-backend` struct gains a `language` field, and
+fallback. Put explicit language inside the relevant `:asr` plist, or omit it
+for automatic detection. Restart Emacs after migrating configuration objects;
 `vox-reload` does not migrate existing structs or remove old definitions.
 
 This constructor option is Qwen-specific. It does not add language support to
@@ -205,141 +204,115 @@ provider and can incur charges. Offline ERT tests use a local fake provider.
 
 ## Backends and models
 
-API settings belong to named backend objects in the plain Lisp variable
-`vox-backends`. Its default is a one-element directory containing Qwen.
-`vox-selection` is the only current choice; it holds a backend name and model,
-or names a registered protocol, never a second copy of the backend configuration.
+`vox-backends` is the shared directory of named service configurations. Each
+service has optional `:asr` and `:tts` capabilities. Top-level `:host` and `:key`
+are defaults; the corresponding capability can override either. Omitted `:key`
+inherits; an explicit `:key nil` requests auth-source for the effective host.
 
 ```elisp
 (setq vox-backends
-      (list (vox-make-qwen "DashScope Beijing")
-            (vox-make-qwen "DashScope Singapore"
-              :host "dashscope-intl.aliyuncs.com")
-            (vox-make-doubao "SeedASR")))
-(setq vox-selection nil)                 ; first backend, first model
-(setq vox-selection '("SeedASR" nil))    ; named backend, first model
-(setq vox-selection '("SeedASR" bigmodel)) ; explicit symbol or string model
-(setq vox-selection 'qwen)               ; registered symbol, factory defaults
-(setq vox-selection 'cli)                ; self-recording CLI, no remote model
+      (list
+       (vox-make-qwen "DashScope"
+         :key (lambda () (getenv "DASHSCOPE_API_KEY"))
+         :asr '(:models (qwen3-asr-flash-realtime) :language nil)
+         :tts '(:models (qwen3-tts-flash-realtime) :voice "Cherry"))
+       (vox-make-doubao "Doubao"
+         :asr '(:resource-id "volc.seedasr.sauc.duration")
+         :tts '(:resource-id "seed-tts-2.0"
+                :voice "zh_female_vv_uranus_bigtts"))))
+(setq vox-asr-selection '("DashScope" qwen3-asr-flash-realtime)
+      vox-tts-selection '("Doubao" seed-tts-2.0))
 ```
 
-Names are unique, case-sensitive strings. Duplicate names (even repeated copies
-of the same object), malformed or empty directories, missing/renamed backend
-names, unregistered symbols, and unlisted models produce errors. Directory
-validation is all-or-nothing, and errors name the failing entry position: one
-malformed or duplicated entry blocks startup and completion for every directory
-entry until it is fixed or removed. There is no fallback for a stale or invalid
-explicit selection. Nil chooses the first backend/model without assigning that
-choice back to `vox-selection`. Reordering the directory therefore changes nil's
-default; a named selection continues to identify its named backend.
+Qwen and Doubao enable default ASR when `:asr` is omitted; add `:tts t` or a
+TTS plist to enable output. `:asr nil` disables input. `vox-make-cli` requires explicit capability plists
+with independent `:command` argv lists. A service must enable at least one
+capability. Nil disables a capability, t enables its defaults, and a plist
+specifies its options. Unknown, duplicate or protocol-inapplicable options fail.
 
-Run `M-x vox-select` for one completion list of backend/model pairs, plus
-`cli (no remote model)`. Pair labels quote each component, for example
-`"SeedASR" / "bigmodel"`, so names containing separators remain unambiguous.
-The picker stores a two-string list, or the symbol `cli`, and uses
-`vox-selection-history`. It is case-sensitive even when global completion ignores
-case. It can replace a stale current choice without first resolving it, but
-requires a valid nonempty directory. Other registered symbols (`qwen`, `qwen-audio`, `doubao`,
-or an extension) are set in Lisp, not offered by the picker. For CLI-only setups,
-set `(setq vox-selection 'cli)` directly; startup then ignores the directory.
+`vox-asr-selection` and `vox-tts-selection` are independent `(NAME MODEL)` choices.
+Nil selects the first service supporting that direction and its first model;
+`(NAME nil)` selects the named capability's first model. CLI capabilities have
+no model and use `(NAME nil)`. Doubao TTS selects its resource ID. Selecting a
+service without the requested capability is an error, never a fallback.
 
-Constructors and completion read no credentials and make no connection or device
-probe. The configured model list is an allowlist, not remote discovery or proof
-of account access. Selection does not save settings. Quit or invalid input leaves
-the current selection intact. If callbacks change the directory, its objects, or
-the selection during completion, the stale prompt errors without overwriting the
-newer state. A nested successful picker also supersedes the outer prompt.
-Active sessions keep detached configuration/model snapshots, including each Qwen
-backend's language.
+`M-x vox-asr-select` and `M-x vox-tts-select` offer only the matching capabilities.
+Names and model IDs are case-sensitive. Selection reads no keys, opens no device
+or connection, and does not persist configuration. A changed configuration or
+newer picker supersedes a pending prompt. Reordering the shared directory changes
+nil defaults; explicit names continue to select their named services.
 
-Explicit programmatic calls remain independent of the current selection and
-directory:
+Names are unique across the whole directory, including ASR-only and TTS-only
+entries. Every entry and both of its capabilities are validated before directory
+selection, so an invalid unused capability must also be fixed. The directory
+contains configuration, not a registry of wire protocols. Models are a local
+allowlist, not remote discovery or evidence of service access.
+
+### Capability options
+
+| Protocol | Direction | Options beyond `:host`, `:key` and `:endpoint` |
+| --- | --- | --- |
+| `qwen` | ASR | `:models`, `:language` |
+| `qwen-audio` | ASR | `:models`, `:language` |
+| `doubao` | ASR | `:models`, `:resource-id` |
+| `tts-qwen-realtime` | TTS | `:models`, `:voice` |
+| `tts-doubao-ws` | TTS | `:resource-id`, `:voice` |
+| `cli`, `tts-cli` | ASR / TTS | `:command` only; no network configuration or model |
+
+The constructor supplies the default `:protocol`. For Qwen task streaming, use
+`:asr '(:protocol qwen-audio)`. Model IDs alone never switch protocols. Recognition
+and API speech output use WSS. Qwen TTS defaults to `tts-qwen-realtime` with
+`qwen3-tts-flash-realtime`; Doubao defaults to `tts-doubao-ws`. Only bidirectional
+TTS protocols are supported. Region-specific services can override `:host` and `:key`
+within either capability. For example:
 
 ```elisp
-(vox-start backend sink model) ; model optional; nil/omitted = backend's first
-(vox-core-start backend sink buffer marker model) ; headless sink may be nil
-(vox-backend-methods backend model) ; validate and snapshot, no connection
+(vox-make-qwen "Split regions"
+  :key (lambda () (getenv "SHARED_KEY"))
+  :asr t
+  :tts '(:host "dashscope-intl.aliyuncs.com" :key nil))
 ```
 
-Here `backend` is an object or registered protocol symbol. The same symbols are
-valid as a `vox-selection` default, which has no model slot; use a directory pair
-to choose a model. The picker lists only directory pairs and `cli`. Built-in
-`qwen`, `qwen-audio`, and `doubao` symbols use factory defaults; `cli` and other registered
-extensions retain their programmatic contracts. `vox-start` without a backend uses
-`vox-selection`; passing a model requires an explicit backend. Core and method
-lookup never consult global selection. The `vox-backend` struct and its accessors
-remain the configuration API.
+The TTS side above uses auth-source for its own host, without calling the shared
+key function. A literal key string is also accepted, but remains visible in the
+init file, `C-h v vox-backends`, and backtraces; use auth-source or a key function
+for persistent configuration. Nothing reads environment variables implicitly.
+Endpoint approval precedes key lookup, and cancellation during lookup prevents
+connection. Key-function failures and raw provider errors are redacted.
 
-Qwen has two separate adapters. `vox-make-qwen` implements **Qwen-ASR-Realtime**,
-including `qwen3-asr-flash-realtime`, on `/api-ws/v1/realtime`.
-`vox-make-qwen-audio` implements **Qwen-Audio-ASR-Streaming**, defaulting to
-`qwen-audio-3.0-asr-flash-streaming`, on `/api-ws/v1/inference`.
-Use the matching constructor, not just a different model ID or endpoint:
-Realtime uses `session.update` and base64 audio; task-streaming uses `run-task`
-and binary audio. Local mocked tests do not establish account/model access or
-recognition accuracy.
-
-All three cloud constructors accept a display NAME, `:host`, `:endpoint`,
-`:models`, and `:key`. Both Qwen constructors also accept `:language`, as described
-under [Recognition language](#recognition-language). Hosts are DNS names or IPv4
-addresses with an optional port, without a scheme or path. Endpoints are absolute
-paths, optionally with query parameters; Vox always uses WSS. For Qwen Realtime the selected
-model replaces any existing `model` query parameter, including on custom
-endpoints; it is never ignored just because a custom endpoint is supplied.
-Qwen task-streaming leaves the endpoint unchanged and sends `payload.model`. Doubao
-sends the selected ID in `model_name` and also accepts the separate `:resource-id`
-entitlement/billing option.
-
-`:key` accepts three forms. nil (the default) reads `auth-source` for the host
-being connected, using login `apikey`, and signals an error when no entry is
-stored. A string is used as the literal key. A zero-argument function is called
-only when connecting, after endpoint approval; this is the explicit way to use an
-environment variable or another store:
+### Programmatic use and migration
 
 ```elisp
-(setq vox-backends
-      (list (vox-make-qwen "Custom credential source"
-              :key (lambda () (getenv "MY_ASR_KEY"))))
-      vox-selection nil)
-
-(setq vox-backends
-      (list (vox-make-qwen "Quick literal" :key "sk-..."))
-      vox-selection nil)
+(vox-start provider sink model) ; selects its ASR capability
+(vox-speak "Hello" provider model) ; selects its TTS capability
+(vox-core-start provider sink buffer marker model)
+(vox-backend-capability provider 'asr) ; detached runtime connection record
 ```
 
-A literal key is visible in the initialization file, `C-h v vox-backends`, and any
-backtrace that prints the configuration; prefer auth-source or a function for a
-key you keep. `vox-api-key-from-auth-source` is the same lookup as the nil
-default, exposed for a different host or user:
-`(lambda () (vox-api-key-from-auth-source "proxy.example" "me"))`.
+The constructors return `vox-provider` objects containing shared defaults and
+capability plists. Runtime adapters still receive `vox-backend` connection records.
+Snapshots detach both capability plists and the selected connection before
+callbacks; later mutation cannot change an active session. Explicit calls do not
+consult either global selection. Extensions may still pass resolved connection
+records or use the ASR protocol registry. Registered `qwen`, `qwen-audio`, `doubao`
+and `cli` symbols remain ASR shortcuts; `cli` uses the existing `vox-cli-command`
+setting and is also offered by the ASR picker.
 
-Key results are checked for empty values and header control characters, and
-function errors are redacted. Backend/model configuration, including Qwen's
-language string, is copied before startup callbacks and the device picker.
-Editing the original object or selecting another backend or model affects the
-next recording, not an active one. Canceling during credential acquisition tears
-down the pending session without opening transport afterward.
+**Migration:** rename `vox-selection` to `vox-asr-selection`, `vox-select` to
+`vox-asr-select`, and `vox-selection-history` to `vox-asr-selection-history`.
+Move constructor `:endpoint`, `:models`, `:language` and `:resource-id` options into
+`:asr`. Replace `vox-make-qwen-audio` with `vox-make-qwen` and
+`:asr '(:protocol qwen-audio ...)`. Replace the preliminary `vox-tts-backends` and
+`vox-make-tts-*` setup with the shared directory and each service's `:tts` options.
+Named TTS CLIs replace `vox-tts-cli-command` and the TTS `cli` selection symbol.
+There are no aliases for these removed names. Update your init and restart Emacs;
+`vox-reload` does not migrate existing configuration objects or struct layouts.
 
-**Direct migration:** remove the `vox-backend` and `vox-model` variable settings
-and the `vox-select-model` command with `vox-model-history` from your
-configuration. Put backend objects in `vox-backends`, set `vox-selection`, and
-bind `vox-select`. A former `(setq vox-backend 'qwen)` (or any registered
-protocol symbol) becomes `(setq vox-selection 'qwen)`; object configurations move
-into the directory. These obsolete variables and commands have no compatibility
-aliases. The backend struct, constructors, accessors, and explicit backend/core
-APIs remain. Explicit core/method calls that previously relied on a global model
-must now pass their model argument.
-
-Also move former `vox-qwen-model`, `vox-qwen-endpoint`, `vox-doubao-endpoint`,
-`vox-doubao-resource-id`, and `vox-doubao-key-environment` settings into the
-constructor and selection. `VOX_QWEN_API_KEY` / `VOX_DOUBAO_API_KEY` are not read;
-use auth-source or an explicit `:key (lambda () (getenv ...))`. Update your init
-and restart Emacs to avoid mixing loaded old definitions with the new API.
-Move the removed `vox-qwen-language` setting to each Qwen constructor's
-`:language` argument; there is no global fallback. The added backend struct field
-requires a restart, not `vox-reload` migration. Audio-device, silence-detection,
-VAD, and packet-size options are unchanged. Doubao gains no language option.
-The CLI uses `(setq vox-selection 'cli)` and manages its own model and language.
+Older `vox-backend`/`vox-model` globals, `vox-select-model`, provider model/endpoint
+variables and `vox-qwen-language` remain removed. Their values belong in the
+shared directory, capability plists and per-direction selection. Recording
+commands, audio-device configuration, silence detection, VAD and packet sizes
+are unchanged. See [speech output](speech-output.md) for TTS playback and limits.
 
 ## Credentials and regions
 
@@ -379,8 +352,8 @@ Qwen Realtime defaults to the Beijing public endpoint and model
 (setq vox-backends
       (list (vox-make-qwen "DashScope Singapore"
               :host "dashscope-intl.aliyuncs.com"
-              :models '(qwen3-asr-flash-realtime)))
-      vox-selection '("DashScope Singapore" qwen3-asr-flash-realtime))
+              :asr '(:models (qwen3-asr-flash-realtime))))
+      vox-asr-selection '("DashScope Singapore" qwen3-asr-flash-realtime))
 ```
 
 Confirm model availability, account permissions, region, and business-space
@@ -391,16 +364,17 @@ verification are not disabled.
 
 ### Qwen Audio task-streaming
 
-The constructor is `vox-make-qwen-audio` and the registered protocol is
-`qwen-audio`. This names the ASR task-streaming adapter, not every Qwen Audio
+Use `vox-make-qwen` with `:asr '(:protocol qwen-audio)`; the registered
+ASR protocol is `qwen-audio`. This names the ASR task-streaming adapter, not every Qwen Audio
 API.
 
 ```elisp
 (setq vox-backends
-      (list (vox-make-qwen-audio "Qwen Audio 3.0"
-              :models '(qwen-audio-3.0-asr-flash-streaming)
-              :language nil))
-      vox-selection '("Qwen Audio 3.0" qwen-audio-3.0-asr-flash-streaming))
+      (list (vox-make-qwen "Qwen Audio 3.0"
+              :asr '(:protocol qwen-audio
+                     :models (qwen-audio-3.0-asr-flash-streaming)
+                     :language nil)))
+      vox-asr-selection '("Qwen Audio 3.0" qwen-audio-3.0-asr-flash-streaming))
 ```
 
 This example uses auth-source for `dashscope.aliyuncs.com` (login `apikey`).
@@ -411,7 +385,7 @@ Workspace hosts still require per-connection confirmation; Vox does not expand
 `{WorkspaceId}` or trust arbitrary subdomains. The endpoint defaults to
 `/api-ws/v1/inference`; there is no `model` query parameter added by Vox.
 The example replaces the directory; add this object alongside your existing
-backends instead if you want to switch between them with `M-x vox-select`.
+backends instead if you want to switch between them with `M-x vox-asr-select`.
 
 Recording starts after `task-started`. Stop drains PCM, sends `finish-task` once,
 and waits for `task-finished` before inserting. Per-sentence revisions replace
@@ -432,9 +406,9 @@ unverified; see the [dated protocol addendum](protocol-audit.md#qwen-task-stream
 ```elisp
 (setq vox-backends
       (list (vox-make-doubao "SeedASR"
-              :models '(bigmodel)
-              :resource-id "volc.seedasr.sauc.duration"))
-      vox-selection '("SeedASR" bigmodel)
+              :asr '(:models (bigmodel)
+                     :resource-id "volc.seedasr.sauc.duration")))
+      vox-asr-selection '("SeedASR" bigmodel)
       vox-doubao-second-pass t
       vox-doubao-chunk-ms 200)
 ```
@@ -646,11 +620,15 @@ Custom endpoints therefore remain a trust decision.
 ## Optional CLI backend
 
 ```elisp
-(setq vox-selection 'cli
-      vox-cli-command '("/absolute/path/to/your-streaming-asr" "--ndjson"))
+(setq vox-backends
+      (list (vox-make-cli "Local"
+              :asr '(:command ("/absolute/path/to/your-streaming-asr" "--ndjson"))
+              :tts '(:command ("/absolute/path/to/your-tts" "--stdout"))))
+      vox-asr-selection '("Local" nil)
+      vox-tts-selection '("Local" nil))
 ```
 
-The executable records its own audio, so Vox cannot perform local silence
+The ASR executable records its own audio, so Vox cannot perform local silence
 detection for this backend. Use `vox-stop` or `vox-toggle` to finish manually.
 It must speak UTF-8 NDJSON v1 on stdout:
 
@@ -705,16 +683,28 @@ See [Architecture](architecture.md) for ownership boundaries.
 Run `M-x vox-doctor` before changing configuration or reporting a setup problem.
 It opens and selects a memory-only `*Vox doctor*` buffer with one line per check
 plus an optional hint: Emacs version, `websocket`, native GnuTLS and zlib, the FFmpeg
-executable, `vox-backends` and `vox-selection` validity, endpoint trust, the
+executable, `vox-backends` and `vox-asr-selection` validity, endpoint trust, the
 credential-source kind, `vox-audio-input` shape, effective stop mode, numeric
 limits, session state and the event-log setting. `FAIL` means the selected path
 cannot work as configured; `WARN` is advisory; `SKIP` means the item was
 deliberately not probed. The report ends with a pass/fail summary.
 
+Seven `TTS-*` checks also report the selected service/model and voice, player
+argv/executable, synthesis CLI argv/executable, WSS host/port trust, credential
+source, text/audio/response/time limits, and synthesis/playback state. They use
+the same selection and limit validation as speech startup. A direction with no
+configured capability and no explicit selection is `SKIP`, so ASR-only and
+TTS-only setups are valid. An explicit missing service or invalid model is `FAIL`.
+Existing ASR result IDs are unchanged; TTS IDs are `tts-selection`, `tts-player`,
+`tts-cli`, `tts-endpoint`, `tts-key`, `tts-limits`, and `tts-session`.
+
 The command is read-only. It never calls a `:key` function, reads auth-source,
 opens a microphone, lists audio devices, contacts a provider, or writes a file.
-It therefore cannot prove that a stored credential is accepted or that live
-recognition works; those remain acceptance checks. A literal key is reported as
+It does not play sound, run a synthesis CLI, or print command arguments. Finding
+a player executable does not prove stdin compatibility, working audio routing,
+or audible output. It cannot prove that credentials are accepted, that a
+voice/resource is available, or that live recognition works; those remain
+acceptance checks. A literal key is reported as
 `WARN` without printing its value. A custom endpoint is also `WARN` regardless
 of reachability, because every connection still needs explicit approval.
 

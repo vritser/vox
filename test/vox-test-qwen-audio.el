@@ -23,9 +23,9 @@
 (defmacro vox-qwen-audio-test--adapter (&rest body)
   "Run BODY with a connected synthetic adapter and captured transport calls."
   (declare (indent 0) (debug t))
-  `(let* ((vox-selection nil)
+  `(let* ((vox-asr-selection nil)
           (vox-qwen-audio-silence-ms 800)
-          (configuration (vox-make-qwen-audio "Synthetic" :key "synthetic-key"))
+          (configuration (vox-test-make-qwen-audio "Synthetic" :key "synthetic-key"))
           (session (vox--make-session :id "synthetic" :generation 1 :state 'connecting
                                       :methods (vox-backend-methods configuration)))
           (vox--active-session session)
@@ -49,7 +49,7 @@
 
 (ert-deftest vox-qwen-audio-factory-and-url-are-separate ()
   :tags '(vox-unit)
-  (let* ((backend (vox-make-qwen-audio "Streaming"))
+  (let* ((backend (vox-test-make-qwen-audio "Streaming"))
          (methods (vox-backend-methods 'qwen-audio)))
     (should (eq (vox-backend-type backend) 'qwen-audio))
     (should (equal (vox-backend-models backend) '("qwen-audio-3.0-asr-flash-streaming")))
@@ -62,7 +62,7 @@
     (should (plist-get methods :needs-external-audio))
     (should (equal (vox-backend-url backend nil)
                    "wss://dashscope.aliyuncs.com/api-ws/v1/inference")))
-  (let ((backend (vox-make-qwen-audio "Custom" :models '(first second)
+  (let ((backend (vox-test-make-qwen-audio "Custom" :models '(first second)
                                           :endpoint "/custom?model=server&x=1")))
     (should (equal (vox-backend-url backend 'second)
                    "wss://dashscope.aliyuncs.com/custom?model=server&x=1"))
@@ -240,7 +240,7 @@
   :tags '(vox-unit)
   (let* ((vox-qwen-audio-silence-ms 600)
          (language (copy-sequence "en"))
-         (configuration (vox-make-qwen-audio "Captured" :models '(first selected)
+         (configuration (vox-test-make-qwen-audio "Captured" :models '(first selected)
                                                :language language :key "synthetic"))
          (session (vox--make-session :generation 1 :state 'connecting
                                      :methods (vox-backend-methods configuration 'selected)))
@@ -264,7 +264,7 @@
   :tags '(vox-unit)
   (dolist (approved '(nil t))
     (let* ((noninteractive nil) order
-           (configuration (vox-make-qwen-audio
+           (configuration (vox-test-make-qwen-audio
                            "Custom" :host "stream.example.test:9443"
                            :key (lambda () (push 'key order) "synthetic")))
            (session (vox--make-session :generation 1 :state 'connecting
@@ -298,7 +298,7 @@
 (ert-deftest vox-qwen-audio-key-cancellation-does-not-resurrect-state ()
   :tags '(vox-unit)
   (let* ((vox--active-session nil) (vox--last-session nil) opened
-         (configuration (vox-make-qwen-audio
+         (configuration (vox-test-make-qwen-audio
                          "Cancel" :key (lambda () (vox-core-cancel) "synthetic"))))
     (cl-letf (((symbol-function 'vox-transport-open)
                (lambda (&rest _) (setq opened t)))
@@ -334,7 +334,7 @@
         (unwind-protect
             (let ((session
                    (vox-core-start
-                    (vox-make-qwen-audio "Core" :key "synthetic")
+                    (vox-test-make-qwen-audio "Core" :key "synthetic")
                     (list :on-finish (lambda (_session text) (push text commits))))))
               (should (eq session (car captured)))
               (should (= recordings 0))
@@ -368,7 +368,7 @@
   :tags '(vox-unit)
   (let* ((noninteractive nil) (vox--active-session nil) (vox--last-session nil)
          key-read opened
-         (configuration (vox-make-qwen-audio
+         (configuration (vox-test-make-qwen-audio
                          "Cancel approval" :host "custom.example.test"
                          :key (lambda () (setq key-read t) "synthetic"))))
     (cl-letf (((symbol-function 'yes-or-no-p)
@@ -390,7 +390,7 @@
 
 (ert-deftest vox-qwen-audio-default-key-uses-connection-host ()
   :tags '(vox-unit)
-  (let* ((configuration (vox-make-qwen-audio
+  (let* ((configuration (vox-test-make-qwen-audio
                          "Auth" :host "dashscope-intl.aliyuncs.com"))
          (session (vox--make-session :generation 1 :state 'connecting
                                      :methods (vox-backend-methods configuration)))
@@ -429,7 +429,7 @@
           (unwind-protect
               (let ((session
                      (vox-core-start
-                      (vox-make-qwen-audio "Reentry" :key "synthetic")
+                      (vox-test-make-qwen-audio "Reentry" :key "synthetic")
                       (list :on-state
                             (lambda (session state)
                               (when (and (eq boundary 'ready) (eq state 'recording))
@@ -466,7 +466,7 @@
           (unwind-protect
               (let ((session
                      (vox-core-start
-                      (vox-make-qwen-audio "Failure" :key "synthetic")
+                      (vox-test-make-qwen-audio "Failure" :key "synthetic")
                       (list :on-finish (lambda (_ text) (push text commits))
                             :on-error (lambda (_ message) (push message errors))))))
                 (vox-qwen-audio-test--deliver session "task-started")

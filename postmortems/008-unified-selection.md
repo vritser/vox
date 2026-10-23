@@ -3,6 +3,9 @@
 _Date: 2026-10-21. Status: Implemented, uncommitted work based on
 `b84cded5d964aaa4685c694ef93e95abe9b284b8` (`b84cded`)._
 
+> Configuration surface superseded by [018](018-shared-speech-service-configuration.md):
+> shared services use separate ASR/TTS capability plists and selection state.
+
 ## Background
 
 [003](003-backend-objects-and-model-selection.md) separated connection objects

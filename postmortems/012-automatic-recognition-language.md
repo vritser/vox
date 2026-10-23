@@ -2,6 +2,9 @@
 
 _Date: 2026-10-21. Status: Implemented in uncommitted work based on `d159323`._
 
+> Configuration surface superseded by [018](018-shared-speech-service-configuration.md):
+> shared services use separate ASR/TTS capability plists and selection state.
+
 ## Background
 
 The Qwen adapter used the global `vox-qwen-language`, defaulting to `"zh"` and

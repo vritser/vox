@@ -2,6 +2,9 @@
 
 _Date: 2026-10-22. Status: Implemented in uncommitted work based on `c1d1ed8`._
 
+> Configuration surface superseded by [018](018-shared-speech-service-configuration.md):
+> shared services use separate ASR/TTS capability plists and selection state.
+
 ## Background
 
 Vox's Qwen adapter speaks the Realtime API for `qwen3-asr-flash-realtime`.

@@ -5,6 +5,7 @@
 ;; No provider-specific branches or buffer insertion belong in this module.
 ;;; Code:
 (require 'vox-backend)
+(require 'vox-tts)
 (require 'vox-activity)
 (require 'vox-log)
 
@@ -212,7 +213,7 @@ value."
 (defun vox-core-start (backend sink &optional buffer marker model)
   "Start BACKEND with SINK, capturing BUFFER and MARKER as output ownership.
 MODEL omitted or nil selects the backend's first model, independently of
-`vox-selection'.  An explicit symbol/string selects an allowed model.
+`vox-asr-selection'.  An explicit symbol/string selects an allowed model.
 Backend configuration and model are captured before callbacks or connection.
 A nil SINK is supported for headless callers.  MARKER is copied and follows
 text typed at the original insertion point.  Return the new session."
@@ -249,6 +250,7 @@ text typed at the original insertion point.  Return the new session."
                    :preview-text ""
                    :statistics (list :received-bytes 0 :sent-bytes 0 :queue-peak 0))))
     (unless (memq chunk-ms '(100 200)) (user-error "Vox frames must be 100 or 200 ms"))
+    (vox-tts-stop)
     (setq vox--active-session session)
     (vox-log-event generation 'start :state 'connecting :stop-mode stop-mode
                    :backend (let ((configuration (plist-get methods :configuration)))

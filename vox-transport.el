@@ -54,7 +54,7 @@ blocked process-send-string and is not strict network backpressure."
 (declare-function make-websocket-frame "websocket" (&rest args))
 
 (cl-defstruct (vox-transport--context (:constructor vox-transport--make-context))
-  session generation websocket process on-error closed failed opened protocol-closed
+  session generation live-p websocket process on-error closed failed opened protocol-closed
   fragments opcode (size 0) (count 0)
   input-queue input-tail input-feeding (input-bytes 0) (input-count 0))
 
@@ -62,12 +62,18 @@ blocked process-send-string and is not strict network backpressure."
 (defvar vox-transport--opening nil
   "Dynamically bound context during a Vox connection's creation.")
 
+(defun vox-transport--owner-live-p (context)
+  "Check CONTEXT's owner independently of connection state."
+  (if (vox-transport--context-live-p context)
+      (funcall (vox-transport--context-live-p context))
+    (vox-session-live-p (vox-transport--context-session context)
+                        (vox-transport--context-generation context))))
+
 (defun vox-transport--live-p (context)
   "Whether CONTEXT can deliver application callbacks."
   (and (not (vox-transport--context-closed context))
        (not (vox-transport--context-failed context))
-       (vox-session-live-p (vox-transport--context-session context)
-                           (vox-transport--context-generation context))))
+       (vox-transport--owner-live-p context)))
 
 (defun vox-transport--reset-fragments (context)
   "Drop all retained message data in CONTEXT."
@@ -95,7 +101,8 @@ blocked process-send-string and is not strict network backpressure."
          (process (vox-transport--context-process context))
          (websocket-debug nil)
          (websocket-callback-debug-on-error nil))
-    (when (eq ws (vox-session-websocket session))
+    (when (and (not (vox-transport--context-live-p context))
+               (eq ws (vox-session-websocket session)))
       (setf (vox-session-websocket session) nil))
     (when (eq context (gethash session vox-transport--contexts))
       (remhash session vox-transport--contexts))
@@ -116,8 +123,7 @@ blocked process-send-string and is not strict network backpressure."
     (vox-transport--dispose context)
     (when live
       (condition-case nil
-          (when (vox-session-live-p (vox-transport--context-session context)
-                                   (vox-transport--context-generation context))
+          (when (vox-transport--owner-live-p context)
             (funcall (vox-transport--context-on-error context) safe-message))
         (error nil)))))
 
@@ -360,24 +366,28 @@ HTTP parsing and all WebSocket decoding remain upstream responsibilities."
             (signal 'quit nil))
            (error (vox-transport--fail context "WebSocket connection failed"))))))))
 
-(defun vox-transport-open (session url headers on-open on-message on-error on-close)
+(defun vox-transport-open (session url headers on-open on-message on-error on-close
+                                   &optional live-p generation)
   "Connect SESSION to WSS URL with HEADERS, without waiting for connection.
 ON-OPEN and ON-CLOSE take no arguments.  ON-MESSAGE receives (payload opcode),
 where text is decoded UTF-8 and binary is unibyte.  ON-ERROR receives only a
-fixed safe string.  Return the websocket and set SESSION's websocket slot."
+fixed safe string.  Return the websocket and set SESSION's websocket slot.
+With LIVE-P, SESSION is an opaque owner; call the zero-argument predicate
+instead of ASR accessors and use GENERATION only as a diagnostic identifier."
   (vox-transport--validate url headers)
   (vox-transport--check-dependency)
-  (let* ((generation (vox-session-generation session))
+  (let* ((generation (if live-p generation (vox-session-generation session)))
          (context (vox-transport--make-context
-                   :session session :generation generation :on-error on-error))
+                   :session session :generation generation :live-p live-p :on-error on-error))
          (gnutls-verify-error t)
          (gnutls-log-level 0)
          (websocket-debug nil)
          (websocket-callback-debug-on-error nil)
          (vox-transport--opening context))
-    (unless (vox-session-live-p session generation)
+    (unless (vox-transport--owner-live-p context)
       (user-error "Cannot connect an inactive session"))
-    (when (vox-session-websocket session)
+    (when (or (gethash session vox-transport--contexts)
+              (and (not live-p) (vox-session-websocket session)))
       (user-error "This session already owns a WebSocket"))
     (puthash session context vox-transport--contexts)
     (condition-case nil
@@ -390,7 +400,8 @@ fixed safe string.  Return the websocket and set SESSION's websocket slot."
                       (when (and (vox-transport--live-p context)
                                  (not (vox-transport--context-opened context)))
                         (setf (vox-transport--context-opened context) t
-                              (vox-session-websocket session) socket)
+                              (vox-transport--context-websocket context) socket)
+                        (unless live-p (setf (vox-session-websocket session) socket))
                         (vox-log-event generation 'transport-open)
                         (funcall on-open))
                     (error (vox-transport--fail context "WebSocket open callback failed"))))
@@ -415,7 +426,7 @@ fixed safe string.  Return the websocket and set SESSION's websocket slot."
                         (condition-case nil
                             (funcall on-close)
                           (error
-                           (when (vox-session-live-p session generation)
+                           (when (vox-transport--owner-live-p context)
                              (condition-case nil
                                  (funcall on-error "WebSocket close callback failed")
                                (error nil))))))
@@ -424,7 +435,7 @@ fixed safe string.  Return the websocket and set SESSION's websocket slot."
                 (vox-transport--context-process context) (websocket-conn ws))
           (if (vox-transport--live-p context)
               (progn
-                (setf (vox-session-websocket session) ws)
+                (unless live-p (setf (vox-session-websocket session) ws))
                 (vox-transport--wrap-process context)
                 ws)
             (vox-transport--dispose context)

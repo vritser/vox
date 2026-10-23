@@ -6,7 +6,9 @@
 ;;; Code:
 (require 'vox-core)
 
-(defcustom vox-cli-command nil "CLI argv list; the program must implement Vox NDJSON v1."
+(defcustom vox-cli-command nil
+  "Fallback argv for the registered `cli' ASR shortcut; implements NDJSON v1.
+Named CLI capabilities instead use their captured :asr :command argv."
   :type '(repeat string) :group 'vox)
 (defcustom vox-cli-max-line-bytes 1048576 "Maximum bytes in one CLI JSON line."
   :type 'integer :group 'vox)
@@ -18,7 +20,7 @@
   :type 'integer :group 'vox)
 
 (cl-defstruct (vox-cli--input (:constructor vox-cli--make-input))
-  queue tail feeding closed (bytes 0) (count 0))
+	      queue tail feeding closed (bytes 0) (count 0))
 
 (defun vox-cli--reset-input (input)
   "Release INPUT's queued callbacks and retained-byte charge."
@@ -140,47 +142,49 @@ Keep each callback's byte charge until its entire input has been consumed."
 
 (defun vox-cli--connect (session on-ready on-event on-error)
   "Launch SESSION CLI with ON-READY, ON-EVENT and ON-ERROR callbacks."
-  (unless (and (consp vox-cli-command) (cl-every #'stringp vox-cli-command)
-               (executable-find (car vox-cli-command)))
-    (user-error "Configure vox-cli-command with an executable argv list"))
-  (let ((generation (vox-session-generation session)) proc stderr)
-    (setf (vox-session-backend-state session)
-          (list :on-ready on-ready :on-event on-event :on-error on-error
-                :pending (unibyte-string)))
-    (setq stderr (vox--private-pipe-process "vox-cli-stderr" #'ignore))
-    (condition-case nil
-        (setq proc
-              (make-process
-               :name "vox-cli" :buffer nil :command vox-cli-command
-               :connection-type 'pipe :coding 'binary :noquery t :stderr stderr
-               :filter (lambda (_process bytes)
-                         (when (vox-session-live-p session generation)
-                           (condition-case nil (vox-cli--feed session bytes)
-                             (quit (vox-core-cancel session) (signal 'quit nil))
-                             (error (funcall on-error "Invalid or oversized CLI output")))))
-               :sentinel
-               (lambda (process _event)
-                 (when (and (vox-session-live-p session generation)
-                            (memq (process-status process) '(exit signal failed)))
-                   (condition-case nil
-                       (vox-cli--receive session
-                                         (cons (process-status process)
-                                               (process-exit-status process)))
-                     (quit (vox-core-cancel session) (signal 'quit nil))
-                     (error (funcall on-error "Invalid or oversized CLI output")))))))
-      (error (when (process-live-p stderr) (delete-process stderr))
-             (error "CLI could not start"))
-      (quit
-       (when (processp stderr) (ignore-errors (delete-process stderr)))
-       (signal 'quit nil)))
-    (let ((current (vox-session-backend-state session)))
-      (if (and current (vox-session-live-p session generation))
-          (setf (vox-session-backend-state session)
-                (append (list :process proc :stderr stderr) current))
-        ;; A callback during startup may have cleaned the session before this
-        ;; point; reclaim the processes rather than resurrecting state.
-        (dolist (process (list proc stderr))
-          (when (processp process) (ignore-errors (delete-process process))))))))
+  (let* ((configuration (plist-get (vox-session-methods session) :configuration))
+         (vox-cli-command (if configuration (vox-backend-command configuration) vox-cli-command)))
+    (unless (and (consp vox-cli-command) (cl-every #'stringp vox-cli-command)
+		 (executable-find (car vox-cli-command)))
+      (user-error "Configure vox-cli-command with an executable argv list"))
+    (let ((generation (vox-session-generation session)) proc stderr)
+      (setf (vox-session-backend-state session)
+            (list :on-ready on-ready :on-event on-event :on-error on-error
+                  :pending (unibyte-string)))
+      (setq stderr (vox--private-pipe-process "vox-cli-stderr" #'ignore))
+      (condition-case nil
+          (setq proc
+		(make-process
+		 :name "vox-cli" :buffer nil :command vox-cli-command
+		 :connection-type 'pipe :coding 'binary :noquery t :stderr stderr
+		 :filter (lambda (_process bytes)
+                           (when (vox-session-live-p session generation)
+                             (condition-case nil (vox-cli--feed session bytes)
+                               (quit (vox-core-cancel session) (signal 'quit nil))
+                               (error (funcall on-error "Invalid or oversized CLI output")))))
+		 :sentinel
+		 (lambda (process _event)
+                   (when (and (vox-session-live-p session generation)
+                              (memq (process-status process) '(exit signal failed)))
+                     (condition-case nil
+			 (vox-cli--receive session
+                                           (cons (process-status process)
+						 (process-exit-status process)))
+                       (quit (vox-core-cancel session) (signal 'quit nil))
+                       (error (funcall on-error "Invalid or oversized CLI output")))))))
+	(error (when (process-live-p stderr) (delete-process stderr))
+               (error "CLI could not start"))
+	(quit
+	 (when (processp stderr) (ignore-errors (delete-process stderr)))
+	 (signal 'quit nil)))
+      (let ((current (vox-session-backend-state session)))
+	(if (and current (vox-session-live-p session generation))
+            (setf (vox-session-backend-state session)
+                  (append (list :process proc :stderr stderr) current))
+          ;; A callback during startup may have cleaned the session before this
+          ;; point; reclaim the processes rather than resurrecting state.
+          (dolist (process (list proc stderr))
+            (when (processp process) (ignore-errors (delete-process process)))))))))
 
 (defun vox-cli--finish (session)
   "Request graceful CLI stop for SESSION using an explicit control line."

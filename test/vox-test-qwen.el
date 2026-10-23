@@ -19,7 +19,7 @@
 
 (ert-deftest vox-qwen-language-default-is-automatic ()
   :tags '(vox-unit)
-  (let ((backend (vox-make-qwen "Automatic")))
+  (let ((backend (vox-test-make-qwen "Automatic")))
     (should-not (vox-backend-language backend))
     (let ((session (plist-get (vox-json-read
                               (vox-json-encode
@@ -30,7 +30,7 @@
 (ert-deftest vox-qwen-language-custom-code-is-sent ()
   :tags '(vox-unit)
   (dolist (language '("zh" "en" "ja"))
-    (let* ((backend (vox-make-qwen "Custom" :language language))
+    (let* ((backend (vox-test-make-qwen "Custom" :language language))
            (session (plist-get (vox-json-read
                                 (vox-json-encode
                                  (vox-qwen-session-update "custom" (vox-backend-language backend))))
@@ -63,7 +63,7 @@
   ;; Default: auth-source for the connecting host; no environment lookup.
   (let* ((session (vox--make-session :id "credentials" :generation 1))
          (vox--active-session session)
-         (vox-selection nil) headers queried)
+         (vox-asr-selection nil) headers queried)
     (cl-letf (((symbol-function 'auth-source-search)
                (lambda (&rest args)
                  (setq queried (list (plist-get args :host)
@@ -79,12 +79,12 @@
       (should (equal queried '("dashscope.aliyuncs.com" "apikey")))))
   ;; Literal and function keys bypass auth-source.
   (dolist (key (list "synthetic-literal" (lambda () "synthetic-literal")))
-    (let* ((configuration (vox-make-qwen "Key" :key key))
+    (let* ((configuration (vox-test-make-qwen "Key" :key key))
            (session (vox--make-session
                      :id "credentials" :generation 1
                      :methods (vox-backend-methods configuration)))
            (vox--active-session session)
-           (vox-selection nil)
+           (vox-asr-selection nil)
            headers)
       (cl-letf (((symbol-function 'auth-source-search)
                  (lambda (&rest _) (ert-fail "Explicit key consulted auth-source")))
@@ -98,7 +98,7 @@
   :tags '(vox-unit)
   (let* ((session (vox--make-session :id "missing" :generation 1))
          (vox--active-session session)
-         (vox-selection nil) opened)
+         (vox-asr-selection nil) opened)
     (cl-letf (((symbol-function 'auth-source-search) (lambda (&rest _) nil))
               ((symbol-function 'getenv)
                (lambda (&rest _) (ert-fail "Environment fallback used")))
@@ -151,14 +151,14 @@
 (ert-deftest vox-qwen-independent-configurations-and-captured-open-options ()
   :tags '(vox-unit)
   ;; Synthetic credentials and delayed fake transports; no provider access.
-  (let* ((vox-selection nil)
+  (let* ((vox-asr-selection nil)
          (vox-qwen-silence-ms 600)
          (key-calls 0)
-         (first (vox-make-qwen
+         (first (vox-test-make-qwen
                  "first" :models '(base selected) :language "en"
                  :endpoint "/custom?feature=one&model=old&model=stale"
                  :key (lambda () (cl-incf key-calls) "synthetic-first")))
-         (second (vox-make-qwen
+         (second (vox-test-make-qwen
                   "second" :host "dashscope-intl.aliyuncs.com" :language "ja"
                   :models '(other) :endpoint "/other?feature=two"
                   :key (lambda () (cl-incf key-calls) "synthetic-second")))
@@ -186,7 +186,7 @@
       (setq vox-qwen-silence-ms 900
             vox--active-session b)
       (vox-qwen-connect b #'ignore #'ignore #'ignore)
-      (setq vox-selection 'invalid vox-qwen-silence-ms 200)
+      (setq vox-asr-selection 'invalid vox-qwen-silence-ms 200)
       (should (= key-calls 2))
       (dolist (connection connections)
         (let* ((s (nth 0 connection)) (url (nth 1 connection))
@@ -219,8 +219,8 @@
 (ert-deftest vox-qwen-custom-host-consent-precedes-lazy-key ()
   :tags '(vox-unit)
   (dolist (approved '(nil t))
-    (let* ((vox-selection nil) (noninteractive nil) order
-           (backend (vox-make-qwen
+    (let* ((vox-asr-selection nil) (noninteractive nil) order
+           (backend (vox-test-make-qwen
                      "proxy" :host "qwen.example" :models '(proxy)
                      :key (lambda () (push 'key order) "synthetic-key")))
            (session (vox--make-session :generation 1
@@ -241,8 +241,8 @@
 
 (ert-deftest vox-qwen-custom-host-auth-source-uses-parsed-host ()
   :tags '(vox-unit)
-  (let* ((vox-selection nil) (noninteractive nil)
-         (backend (vox-make-qwen "proxy" :host "qwen.example:9443"))
+  (let* ((vox-asr-selection nil) (noninteractive nil)
+         (backend (vox-test-make-qwen "proxy" :host "qwen.example:9443"))
          (session (vox--make-session :generation 1
                                     :methods (vox-backend-methods backend)))
          (vox--active-session session)
@@ -260,7 +260,7 @@
   :tags '(vox-unit)
   (let* ((session (vox--make-session
                    :generation 1 :state 'connecting
-                   :methods (list :configuration (vox-make-qwen "Invalid")
+                   :methods (list :configuration (vox-test-make-qwen "Invalid")
                                   :model "not-supported")))
          (vox--active-session session) calls)
     (cl-letf (((symbol-function 'vox-backend-secret)
@@ -276,7 +276,7 @@
 
 (ert-deftest vox-qwen-stale-session-never-resolves-key-or-opens-transport ()
   :tags '(vox-unit)
-  (let ((vox--active-session nil) (vox-selection nil) calls
+  (let ((vox--active-session nil) (vox-asr-selection nil) calls
         (session (vox--make-session :id "stale" :generation 1)))
     (cl-letf (((symbol-function 'vox-backend-secret)
                (lambda (&rest _) (push 'key calls)))
@@ -343,8 +343,8 @@
   :tags '(vox-unit)
   (dolist (boundary '(approval key))
     (let* ((vox--active-session nil) (vox--last-session nil)
-           (vox-selection nil) (noninteractive nil) order opened
-           (backend (vox-make-qwen
+           (vox-asr-selection nil) (noninteractive nil) order opened
+           (backend (vox-test-make-qwen
                      "cancel" :host "qwen.example"
                      :key (lambda ()
                             (push 'key order)
@@ -387,7 +387,7 @@
           (vox--generation 0) (vox-event-log-enabled nil)
           (vox-transport--contexts (make-hash-table :test #'eq))
           (vox-stop-mode 'manual)
-          (backend (vox-make-qwen
+          (backend (vox-test-make-qwen
                     "Synthetic" :models '(qwen3-asr-flash-realtime)
                     :key "synthetic-key"))
           (real-message (symbol-function 'vox-qwen--message))

@@ -2,6 +2,9 @@
 
 _Date: 2026-10-22. Status: Implemented in uncommitted work._
 
+> Scope extended by [019](019-speech-output-self-check.md) to include TTS and
+> optional speech directions; the original fifteen-check design below is historical.
+
 _Implementation evidence: Uncommitted work based on `5ff4719`. The doctor module,
 its offline regressions, and the startup-limit extraction belong to this work;
 this record does not claim a live-provider or real-device acceptance result._

@@ -5,7 +5,8 @@ Speak in Emacs, and Vox turns your voice into text at the cursor.
 Vox is a native streaming speech input package with Qwen, Doubao, and an optional
 CLI backend. It previews recognition as you speak, then inserts the final text
 once with an undo boundary. It never presses Return or submits on your behalf.
-No Python or Node bridge is required.
+Optional text-to-speech reads selected text through Qwen Realtime or
+Doubao bidirectional APIs, or a trusted CLI. No Python or Node bridge is required.
 
 ## Quick start
 
@@ -25,27 +26,25 @@ configuration to install Vox directly from Git:
          (vox-make-qwen "DashScope"
            :key "YOUR_DASHSCOPE_API_KEY"
            :host "dashscope.aliyuncs.com"
-           :endpoint "/api-ws/v1/realtime"
-           :models '(qwen3-asr-flash-realtime)
-           :language nil) ; Auto-detect, or use "zh" / "en".
+           :asr '(:models (qwen3-asr-flash-realtime)
+                  :language nil)) ; Auto-detect, or use "zh" / "en".
          (vox-make-doubao "SeedASR"
            :key "YOUR_DOUBAO_API_KEY"
            :host "openspeech.bytedance.com"
-           :endpoint "/api/v3/sauc/bigmodel_async"
-           :models '(bigmodel)
-           :resource-id "volc.seedasr.sauc.duration"))
-        ;; Default backend/model; use M-x vox-select to switch later.
-        vox-selection '("DashScope" qwen3-asr-flash-realtime)))
+           :asr '(:models (bigmodel)
+                  :resource-id "volc.seedasr.sauc.duration")))
+        ;; Default backend/model; use M-x vox-asr-select to switch later.
+        vox-asr-selection '("DashScope" qwen3-asr-flash-realtime)))
 ```
 
 Replace the key placeholder for the backend you want to use; the other entry
 can be removed. The defaults select Qwen in Beijing. For Doubao, set
-`vox-selection` to `'("SeedASR" bigmodel)` or run `M-x vox-select`; its resource ID
+`vox-asr-selection` to `'("SeedASR" bigmodel)` or run `M-x vox-asr-select`; its resource ID
 must match your enabled service. Keep the endpoint/model pairing unless you know
 the provider supports your changes. See [regions and provider settings](docs/customization.md#credentials-and-regions).
 
-For `qwen-audio-3.0-asr-flash-streaming`, use `vox-make-qwen-audio`
-instead of `vox-make-qwen`: the models use different wire protocols. See the
+For `qwen-audio-3.0-asr-flash-streaming`, configure `vox-make-qwen` with
+`:asr '(:protocol qwen-audio)`: the models use different wire protocols. See the
 [streaming configuration](docs/customization.md#qwen-audio-task-streaming).
 
 No key bindings are installed by this configuration; use `M-x` or bind commands
@@ -77,12 +76,17 @@ charges.
 
 | Command | Action |
 | --- | --- |
-| `vox-select` | Choose a backend and model for the next recording |
+| `vox-asr-select` | Choose a backend and model for the next recording |
 | `vox-start` / `vox-stop` | Start recording / finish gracefully |
 | `vox-show-transcript` | View current or last text; unfinished text is marked unconfirmed |
 | `vox-copy-confirmed-text` | Copy confirmed text to the kill ring |
 | `vox-forget-transcript` | Clear the last session and its recovery buffer |
 | `vox-doctor` | Check dependencies and configuration without side effects |
+| `vox-speak` / `vox-speak-stop` | Read the region (or prompted text) / stop speech immediately |
+| `vox-tts-select` | Choose a configured speech output backend and model, or CLI |
+
+For incremental text producers, use `vox-speak-open`, `vox-speak-send`, and
+`vox-speak-finish` with Qwen, Doubao or CLI; see [speech output](docs/speech-output.md).
 
 For longer dictation, set `(setq vox-stop-mode 'manual)` and stop explicitly.
 Both modes insert once at the end of the session, not after each sentence. The
@@ -96,6 +100,7 @@ audio and transcripts off disk; transcript recovery is in memory.
 
 - [Customization](docs/customization.md): devices, credentials, languages,
   backends, diagnostics, and troubleshooting.
+- [Speech output](docs/speech-output.md): TTS API/CLI setup, voices and playback.
 - [Development](docs/development.md): verification, packaging, and live acceptance.
 - [Architecture](docs/architecture.md): module ownership and extension points.
 - [Protocol audit](docs/protocol-audit.md) and [transport audit](docs/transport-audit.md):

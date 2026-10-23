@@ -4,6 +4,50 @@
 
 ### Added
 
+- **Bidirectional TTS only:** Qwen defaults to Realtime (`tts-qwen-realtime`,
+  `qwen3-tts-flash-realtime`), alongside Doubao WSS and streaming CLI input/output.
+  `vox-speak-open`, `vox-speak-send` and `vox-speak-finish` accept producer text
+  while audio plays. Stop drops queued text/audio and closes the source; provider
+  cancellation is best effort and accepted text may still be billed. The preliminary
+  OpenAI TTS, Qwen HTTP and Doubao SSE adapters, `vox-make-openai`, and the HTTP
+  transport are removed. Migrate Qwen models/endpoints and restart Emacs
+  (rationale: [postmortem 022](postmortems/022-bidirectional-only-speech-output.md);
+  earlier text-input decision: [021](postmortems/021-incremental-speech-text-input.md)).
+
+- **Streaming playback:** Qwen PCM, Doubao MP3 and CLI output feed one persistent
+  player through a bounded queue. Replacement speech and recording startup stop
+  output; authoritative synthesis completion, queue drain and successful player
+  exit remain required. Late failures stop playback but cannot withdraw audio
+  already heard. Separate synthesis/playback timeouts and queue limits apply
+  (rationale: [postmortem 020](postmortems/020-streaming-speech-playback.md),
+  superseded for protocols by [022](postmortems/022-bidirectional-only-speech-output.md)).
+
+- **TTS self-check:** `vox-doctor` now reports speech-output selection, voice,
+  player/CLI executable availability, WSS destination trust, credential-source
+  kind, limits and session state. Unconfigured directions are skipped; explicit
+  invalid selections fail. Checks never resolve credentials, run a CLI, contact
+  a provider or play audio; executable availability is not audible-playback
+  acceptance (rationale: [postmortem 019](postmortems/019-speech-output-self-check.md)).
+
+- **Shared ASR/TTS configuration (breaking):** `vox-backends` now holds service
+  configurations with shared `:host`/`:key` defaults and separate `:asr`/`:tts`
+  capability plists. Each capability can override host/key and owns its protocol,
+  endpoint, models and options. `vox-make-cli` supports distinct ASR/TTS commands.
+  `vox-asr-selection` / `vox-tts-selection` and `vox-asr-select` / `vox-tts-select`
+  choose independently from the same directory. Move old constructor options into
+  `:asr`, use `:protocol qwen-audio` instead of `vox-make-qwen-audio`, and replace
+  the preliminary TTS constructors/directory with shared services. Restart Emacs
+  after migration; no aliases or live-object migration are provided (rationale:
+  [postmortem 018](postmortems/018-shared-speech-service-configuration.md)).
+
+- **Speech output through APIs and CLI:** `vox-speak`, `vox-speak-stop` and
+  `vox-tts-select` add optional speech output with Qwen Realtime
+  and Doubao adapters, plus a streaming UTF-8 stdin / encoded-audio stdout CLI.
+  Audio is bounded and played from memory (now bidirectional; see 022 above). Recording
+  stops speech output; cancellation disposes requests and playback processes.
+  Provider acceptance and physical playback remain unverified (rationale:
+  [postmortem 017](postmortems/017-api-and-cli-speech-output.md)).
+
 - **Qwen Audio task-streaming:** `vox-make-qwen-audio` adds native support
   for `qwen-audio-3.0-asr-flash-streaming` using DashScope `run-task`, binary PCM,
   and `finish-task` on `/api-ws/v1/inference`. Language hints, named selection,
@@ -213,6 +257,10 @@
   unknown test name.
 
 ### Fixed
+
+- **TTS text privacy:** interactive speech reads text in the command body so
+  Emacs does not retain it as an argument in `command-history`. Minibuffer
+  history remains disabled, and active-region speech uses the same protection.
 
 - **Inline recognition and cursor placement:** previews no longer add square
   brackets or a leading space. After final insertion, point follows the text

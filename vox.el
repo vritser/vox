@@ -1,4 +1,4 @@
-;;; vox.el --- Native streaming speech input for Emacs -*- lexical-binding: t; -*-
+;;; vox.el --- Native speech input and output for Emacs -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2026
 ;; SPDX-License-Identifier: GPL-3.0-or-later
@@ -10,6 +10,7 @@
 ;; Independent Qwen/Doubao WSS speech input, plus optional streaming CLI.
 ;; Audio leaves this machine only when explicitly starting a cloud backend.
 ;; Preview is ephemeral; final text is inserted once and is never submitted.
+;; Optional TTS sends explicit text to an API or trusted CLI and plays audio.
 
 ;;; Code:
 (require 'cl-lib)
@@ -26,12 +27,52 @@
 (require 'vox-reload)
 
 ;;;###autoload
+(defun vox-speak (text &optional backend model)
+  "Speak TEXT using the TTS selection or explicit BACKEND and MODEL.
+Interactively read the active region, or prompt for text without history.
+Starting a recording stops speech output.  See `vox-tts-select'."
+  ;; Read in the command body so call-interactively cannot record private text
+  ;; as an argument in `command-history'.  Keyboard macros use this path too.
+  (interactive (list nil))
+  (when (called-interactively-p 'any)
+    (setq text (if (use-region-p)
+                   (buffer-substring-no-properties (region-beginning) (region-end))
+                 (let ((history-add-new-input nil)) (read-string "Speak: ")))))
+  (vox-tts-start text backend model))
+
+;;;###autoload
+(defun vox-speak-open (&optional backend model)
+  "Open a speech session accepting text incrementally from a producer.
+Use `vox-speak-send' as text arrives and `vox-speak-finish' at producer EOF.
+BACKEND and MODEL default to TTS selection.  Return the captured session."
+  (vox-tts-open backend model))
+
+(defun vox-speak-send (session text)
+  "Append TEXT to SESSION; stale handles cannot write into a successor."
+  (vox-tts-send session text))
+
+(defun vox-speak-finish (session)
+  "Finish SESSION's text input and let remaining audio play."
+  (vox-tts-finish session))
+
+;;;###autoload
+(defun vox-speak-stop (&optional session)
+  "Stop synthesis and playback for SESSION, or the current output owner.
+A stale SESSION does not cancel its successor."
+  (interactive)
+  (if session
+      (when (vox-tts--live-p session) (vox-tts--end session 'cancelled))
+    (vox-tts-stop)))
+
+;;;###autoload
 (defun vox-start (&optional backend sink model)
-  "Start the current `vox-selection', using SINK or a buffer sink.
-An explicit BACKEND object or registered symbol bypasses `vox-selection'
-and `vox-backends'; MODEL then selects its model (nil means its first).
+  "Start the current `vox-asr-selection', using SINK or a buffer sink.
+An explicit BACKEND provider, connection or registered symbol bypasses
+`vox-asr-selection' and `vox-backends'.  MODEL selects its model;
+nil means the first configured model.
 MODEL requires an explicit BACKEND.  Configuration and model are copied
 before callbacks or device prompting.
+Shared providers resolve their ASR capability.
 SINK is a plist of :on-preview, :on-finish, :on-state, :on-error functions.
 It receives the captured session, never the callback's current buffer.
 For a headless session with no sink use `vox-core-start' directly.
@@ -78,18 +119,18 @@ calls require explicit input configuration and do not prompt."
                             target marker selected-model)))
       (set-marker marker nil))))
 
-(defvar vox-selection-history nil
-  "Minibuffer history of backend/model pairs chosen with `vox-select'.")
+(defvar vox-asr-selection-history nil
+  "Minibuffer history of backend/model pairs chosen with `vox-asr-select'.")
 
 (defvar vox--selection-revision 0
   "Successful picker revision, used to reject superseded prompts.")
 
 ;;;###autoload
-(defun vox-select ()
+(defun vox-asr-select ()
   "Select a backend/model pair for the next recording, or the CLI.
 Use only configured models from `vox-backends', with case-sensitive names.
 Registered protocol symbols other than `cli' are configured in Lisp, not
-offered here.  Set and return `vox-selection'.  Do not connect, read keys or
+offered here.  Set and return `vox-asr-selection'.  Do not connect, read keys or
 save settings.  An active session retains its snapshot.  Quit and invalid or
 stale choices leave the current selection untouched, including changes by
 nested commands."
@@ -97,28 +138,29 @@ nested commands."
   (let* ((candidates (vox--backend-candidates))
          (snapshots (mapcar (lambda (entry) (vox-backend-snapshot (cdr entry)))
                             candidates))
-         (previous vox-selection)
+         (previous vox-asr-selection)
          (previous-copy (vox--backend-copy-tree previous))
          (revision vox--selection-revision)
          (completion-ignore-case nil)
          (choices
           (append
            (cl-mapcan
-            (lambda (configuration)
-              (mapcar (lambda (model)
-                        (let ((name (vox-backend-name configuration)))
-                          (cons (format "%S / %S" name model) (list name model))))
-                      (vox-backend-models configuration)))
+            (lambda (backend)
+              (let ((configuration (vox-backend-capability backend 'asr)))
+                (mapcar (lambda (model)
+                          (let ((name (vox-backend-name configuration)))
+                            (cons (format "%S / %S" name model) (list name model))))
+                        (or (vox-backend-models configuration) '(nil)))))
             snapshots)
            (list (cons "cli (no remote model)" 'cli))))
          (choice (completing-read "Vox backend / model: " choices nil t nil
-                                  'vox-selection-history))
+                                  'vox-asr-selection-history))
          (selected (cdr (assoc choice choices))))
     (unless selected (user-error "No Vox backend/model pair selected"))
     ;; Completion may run nested commands or mutate objects and strings in place.
     (unless (and (= revision vox--selection-revision)
-                 (eq previous vox-selection)
-                 (equal previous-copy vox-selection)
+                 (eq previous vox-asr-selection)
+                 (equal previous-copy vox-asr-selection)
                  (let ((current (vox--backend-candidates)))
                    (and (equal candidates current)
                         (cl-every #'eq (mapcar #'cdr candidates) (mapcar #'cdr current))
@@ -127,13 +169,13 @@ nested commands."
                                        current)))))
       (user-error "Vox configuration changed during selection; try again"))
     ;; Validate protocol availability too, without invoking its methods.
-    (let* ((vox-selection selected)
+    (let* ((vox-asr-selection selected)
            (resolved (vox--resolve-selection)))
       (vox-backend-methods (car resolved) (cdr resolved)))
-    (setq vox-selection (vox--backend-copy-tree selected))
+    (setq vox-asr-selection (vox--backend-copy-tree selected))
     (cl-incf vox--selection-revision)
     (message "Vox selection set to %s for the next recording" choice)
-    vox-selection))
+    vox-asr-selection))
 
 ;;;###autoload
 (defun vox-stop ()
